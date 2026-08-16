@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gcicy-positive-tensor-networks"
+version = "1.0.0"
+description = "Positive tensor-network Kahler metrics and numerical geometry for gCICY threefolds"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+  {name = "Juntao Wang"}
+]
+dependencies = [
+  "numpy==1.26.4",
+  "scipy==1.13.1",
+  "torch==2.7.1"
+]
+
+[project.urls]
+Repository = "https://github.com/jtwangbimsa-dragon/gcicy-positive-tensor-networks"
+Data = "https://doi.org/10.5281/zenodo.21963526"
+
+[tool.setuptools.packages.find]
+include = ["gcicy_metric*"]

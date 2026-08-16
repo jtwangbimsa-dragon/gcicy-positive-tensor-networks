@@ -1,0 +1,16 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the associated article and the Zenodo archive."
+title: "Positive Tensor-Network Kahler Metrics on gCICY Threefolds"
+type: software
+version: 1.0.0
+date-released: 2026-08-16
+authors:
+  - family-names: Wang
+    given-names: Juntao
+repository-code: "https://github.com/jtwangbimsa-dragon/gcicy-positive-tensor-networks"
+url: "https://doi.org/10.5281/zenodo.21963526"
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.21963526
+    description: Versioned numerical reproducibility archive
+license: MIT
