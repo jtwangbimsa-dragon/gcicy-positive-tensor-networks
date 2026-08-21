@@ -5,10 +5,13 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 import math
+import os
 import platform
 import sys
+import tempfile
 import time
 import traceback
 from pathlib import Path
@@ -36,6 +39,7 @@ from gcicy_metric.pipeline.risk import (  # noqa: E402
     smooth_upper_log_ratio_excess_torch,
     weighted_cvar_torch,
 )
+
 try:  # Support both direct CLI execution and package-style test imports.
     from scripts.train_quintic_full_h_same_points import (  # noqa: E402
         cvar,
@@ -67,6 +71,30 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pullbacks-dir", type=Path)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--initial-model", type=Path)
+    parser.add_argument(
+        "--checkpoint",
+        type=Path,
+        help=(
+            "optional crash-recovery checkpoint, atomically replaced at every "
+            "completed validation boundary"
+        ),
+    )
+    parser.add_argument(
+        "--resume-checkpoint",
+        type=Path,
+        help=(
+            "resume the current/best model, Adam state, RNG streams, history, "
+            "timing, and memory counters from a compatible checkpoint"
+        ),
+    )
+    parser.add_argument(
+        "--skip-blind-audit",
+        action="store_true",
+        help=(
+            "publish a development-only result without reading the frozen blind "
+            "inputs or writing blind_test_tail_arrays.npz"
+        ),
+    )
     parser.add_argument(
         "--distillation-teacher-model",
         type=Path,
@@ -274,9 +302,7 @@ def validate_args(args: argparse.Namespace) -> None:
             "output dimension must be at least the source-section dimension"
         )
     if args.dictionary_rank > output_dimension * source_count:
-        raise ValueError(
-            "dictionary rank exceeds the local rectangular-map dimension"
-        )
+        raise ValueError("dictionary rank exceeds the local rectangular-map dimension")
     if args.learning_rate <= 0 or args.gradient_clip_norm <= 0:
         raise ValueError("learning rate and gradient clipping must be positive")
     if args.positive_floor < 0 or args.initialization_noise < 0:
@@ -286,8 +312,7 @@ def validate_args(args: argparse.Namespace) -> None:
     if not 0 < args.tail_fraction <= 1:
         raise ValueError("tail fraction must lie in (0, 1]")
     if (
-        args.tail_loss_kind == "upper_threshold"
-        and args.tail_ratio_threshold <= 1
+        args.tail_loss_kind == "upper_threshold" and args.tail_ratio_threshold <= 1
     ) or args.tail_smooth_temperature <= 0:
         raise ValueError("invalid upper-tail objective configuration")
     loss_weights = (
@@ -346,6 +371,462 @@ def validate_args(args: argparse.Namespace) -> None:
             raise ValueError(
                 "full two-site blocking requires an even site count of at least four"
             )
+
+
+TRAINING_CHECKPOINT_SCHEMA = "quintic-positive-tensor-network-checkpoint-v1"
+
+
+def parameter_scope_from_args(args: argparse.Namespace) -> str:
+    """Name the active parameter family using the workflow's stable vocabulary."""
+
+    if args.freeze_inherited_bond_dimension:
+        return "new_channels"
+    if args.freeze_physical_dictionary:
+        return "cores"
+    return "joint"
+
+
+def load_source_report_for_evaluation(
+    path: Path,
+    *,
+    skip_blind_audit: bool,
+) -> dict[str, Any]:
+    """Do not expose historical comparator results to development-only runs."""
+
+    if skip_blind_audit:
+        return {}
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def sha256_python_tree(path: Path) -> str:
+    """Hash Python implementation sources together with their relative paths."""
+
+    digest = hashlib.sha256()
+    for source in sorted(path.rglob("*.py")):
+        relative = source.relative_to(path).as_posix().encode("utf-8")
+        digest.update(len(relative).to_bytes(8, "big"))
+        digest.update(relative)
+        digest.update(source.stat().st_size.to_bytes(8, "big"))
+        with source.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1 << 20), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _metadata_differences(
+    expected: Any,
+    observed: Any,
+    *,
+    prefix: str = "",
+) -> list[str]:
+    """Return deterministic leaf-level differences for checkpoint diagnostics."""
+
+    if type(expected) is not type(observed):
+        return [
+            f"{prefix}: expected {expected!r} ({type(expected).__name__}), got "
+            f"{observed!r} ({type(observed).__name__})"
+        ]
+    if isinstance(expected, dict) and isinstance(observed, dict):
+        differences = []
+        for key in sorted(set(expected) | set(observed)):
+            path = f"{prefix}.{key}" if prefix else str(key)
+            if key not in expected:
+                differences.append(f"{path}: unexpected")
+            elif key not in observed:
+                differences.append(f"{path}: missing")
+            else:
+                differences.extend(
+                    _metadata_differences(expected[key], observed[key], prefix=path)
+                )
+        return differences
+    if isinstance(expected, (list, tuple)):
+        if len(expected) != len(observed):
+            return [f"{prefix}: expected length {len(expected)}, got {len(observed)}"]
+        differences = []
+        for index, (expected_item, observed_item) in enumerate(
+            zip(expected, observed, strict=True)
+        ):
+            differences.extend(
+                _metadata_differences(
+                    expected_item,
+                    observed_item,
+                    prefix=f"{prefix}[{index}]",
+                )
+            )
+        return differences
+    if expected != observed:
+        return [f"{prefix}: expected {expected!r}, got {observed!r}"]
+    return []
+
+
+def validate_training_checkpoint(
+    payload: dict,
+    *,
+    training_semantics: dict,
+    frozen_input_hashes: dict,
+) -> None:
+    """Reject incomplete checkpoints and any semantic or input-hash drift."""
+
+    if not isinstance(payload, dict):
+        raise ValueError("resume checkpoint payload must be a dictionary")
+    if payload.get("schema") != TRAINING_CHECKPOINT_SCHEMA:
+        raise ValueError("unrecognized quintic tensor-network training checkpoint")
+    required = {
+        "training_semantics",
+        "frozen_input_hashes",
+        "epoch",
+        "next_epoch",
+        "current_model_state_dict",
+        "optimizer_state_dict",
+        "permutation_generator_state",
+        "cpu_rng_state",
+        "cuda_rng_state",
+        "cuda_rng_device",
+        "history",
+        "best_state_dict",
+        "best_score",
+        "best_epoch",
+        "optimizer_steps",
+        "fixed_log_kappa",
+        "fixed_log_kappa_source",
+        "distillation_evidence",
+        "timing_seconds",
+        "device_memory",
+    }
+    missing = sorted(required.difference(payload))
+    if missing:
+        raise ValueError(f"resume checkpoint lacks fields: {missing}")
+
+    semantic_differences = _metadata_differences(
+        training_semantics,
+        payload["training_semantics"],
+    )
+    if semantic_differences:
+        raise ValueError(
+            "resume checkpoint training semantics mismatch: "
+            + "; ".join(semantic_differences)
+        )
+    hash_differences = _metadata_differences(
+        frozen_input_hashes,
+        payload["frozen_input_hashes"],
+    )
+    if hash_differences:
+        raise ValueError(
+            "resume checkpoint frozen input hash mismatch: "
+            + "; ".join(hash_differences)
+        )
+
+    epoch = payload["epoch"]
+    next_epoch = payload["next_epoch"]
+    best_epoch = payload["best_epoch"]
+    optimizer_steps = payload["optimizer_steps"]
+    if not isinstance(epoch, int) or isinstance(epoch, bool) or epoch < 0:
+        raise ValueError("resume checkpoint epoch must be a non-negative integer")
+    if (
+        not isinstance(next_epoch, int)
+        or isinstance(next_epoch, bool)
+        or next_epoch != epoch + 1
+    ):
+        raise ValueError("resume checkpoint next_epoch must equal epoch + 1")
+    if (
+        not isinstance(best_epoch, int)
+        or isinstance(best_epoch, bool)
+        or not 0 <= best_epoch <= epoch
+    ):
+        raise ValueError("resume checkpoint best_epoch is outside its epoch range")
+    if (
+        not isinstance(optimizer_steps, int)
+        or isinstance(optimizer_steps, bool)
+        or optimizer_steps < 0
+    ):
+        raise ValueError("resume checkpoint optimizer_steps must be non-negative")
+
+    history = payload["history"]
+    if not isinstance(history, list) or not history:
+        raise ValueError("resume checkpoint history must be a non-empty list")
+    history_epochs = [
+        row.get("epoch") if isinstance(row, dict) else None for row in history
+    ]
+    if (
+        any(
+            not isinstance(value, int) or isinstance(value, bool)
+            for value in history_epochs
+        )
+        or history_epochs != sorted(set(history_epochs))
+        or history_epochs[-1] != epoch
+        or best_epoch not in history_epochs
+    ):
+        raise ValueError(
+            "resume checkpoint history epochs must be unique, increasing, end at "
+            "epoch, and contain best_epoch"
+        )
+    if not isinstance(payload["current_model_state_dict"], dict):
+        raise ValueError("resume checkpoint current model state must be a dictionary")
+    if not isinstance(payload["best_state_dict"], dict):
+        raise ValueError("resume checkpoint best model state must be a dictionary")
+    if not isinstance(payload["optimizer_state_dict"], dict):
+        raise ValueError("resume checkpoint optimizer state must be a dictionary")
+    for name in ("permutation_generator_state", "cpu_rng_state"):
+        value = payload[name]
+        if not torch.is_tensor(value) or value.ndim != 1:
+            raise ValueError(
+                f"resume checkpoint {name} must be a one-dimensional tensor"
+            )
+    cuda_rng_state = payload["cuda_rng_state"]
+    cuda_rng_device = payload["cuda_rng_device"]
+    if (cuda_rng_state is None) != (cuda_rng_device is None):
+        raise ValueError(
+            "resume checkpoint CUDA RNG state/device must be both set or null"
+        )
+    if cuda_rng_state is not None and (
+        not torch.is_tensor(cuda_rng_state) or cuda_rng_state.ndim != 1
+    ):
+        raise ValueError("resume checkpoint CUDA RNG state must be one-dimensional")
+    if cuda_rng_device is not None and not isinstance(cuda_rng_device, str):
+        raise ValueError("resume checkpoint CUDA RNG device must be a string")
+    if not np.isfinite(float(payload["fixed_log_kappa"])):
+        raise ValueError("resume checkpoint fixed_log_kappa must be finite")
+    if not isinstance(payload["fixed_log_kappa_source"], str):
+        raise ValueError("resume checkpoint fixed_log_kappa_source must be a string")
+    best_score = float(payload["best_score"])
+    if np.isnan(best_score):
+        raise ValueError("resume checkpoint best_score must not be NaN")
+
+    timing = payload["timing_seconds"]
+    expected_timing_keys = {"distillation", "training", "wall_total"}
+    if not isinstance(timing, dict) or set(timing) != expected_timing_keys:
+        raise ValueError("resume checkpoint timing_seconds has invalid fields")
+    if any(
+        not np.isfinite(float(value)) or float(value) < 0 for value in timing.values()
+    ):
+        raise ValueError(
+            "resume checkpoint timing_seconds must be finite and non-negative"
+        )
+    device_memory = payload["device_memory"]
+    if device_memory is not None:
+        expected_memory_keys = {
+            "maximum_allocated_bytes",
+            "maximum_reserved_bytes",
+        }
+        if (
+            not isinstance(device_memory, dict)
+            or set(device_memory) != expected_memory_keys
+        ):
+            raise ValueError("resume checkpoint device_memory has invalid fields")
+        if any(
+            not isinstance(value, int) or isinstance(value, bool) or value < 0
+            for value in device_memory.values()
+        ):
+            raise ValueError("resume checkpoint device_memory must be non-negative")
+
+
+def validate_checkpoint_paths(
+    *,
+    checkpoint_path: Path,
+    resume_checkpoint_path: Path | None,
+    model_path: Path,
+    report_path: Path,
+    frozen_input_paths: set[Path],
+) -> None:
+    """Prevent recovery writes from overwriting final or immutable inputs."""
+
+    if model_path == report_path:
+        raise ValueError("final model and report paths must differ")
+    if model_path in frozen_input_paths or report_path in frozen_input_paths:
+        raise ValueError("final outputs must differ from frozen inputs")
+    if checkpoint_path in frozen_input_paths | {model_path, report_path}:
+        raise ValueError(
+            "checkpoint path must differ from final outputs and frozen inputs"
+        )
+    if resume_checkpoint_path in frozen_input_paths | {model_path, report_path}:
+        raise ValueError(
+            "resume checkpoint path must differ from final outputs and frozen inputs"
+        )
+
+
+def current_device_memory(device: torch.device) -> dict[str, int] | None:
+    """Return this process's CUDA peak counters, or ``None`` for CPU."""
+
+    if device.type != "cuda":
+        return None
+    return {
+        "maximum_allocated_bytes": int(torch.cuda.max_memory_allocated(device)),
+        "maximum_reserved_bytes": int(torch.cuda.max_memory_reserved(device)),
+    }
+
+
+def merge_device_memory(
+    previous: dict[str, int] | None,
+    current: dict[str, int] | None,
+) -> dict[str, int] | None:
+    """Take per-counter maxima over every process in a resumed trajectory."""
+
+    if previous is None:
+        return None if current is None else copy.deepcopy(current)
+    if current is None:
+        return copy.deepcopy(previous)
+    return {
+        key: max(int(previous[key]), int(current[key]))
+        for key in ("maximum_allocated_bytes", "maximum_reserved_bytes")
+    }
+
+
+def _clone_to_cpu(value: Any) -> Any:
+    """Recursively detach tensor-bearing optimizer/model state onto CPU."""
+
+    if torch.is_tensor(value):
+        return value.detach().cpu().clone()
+    if isinstance(value, dict):
+        return {key: _clone_to_cpu(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_clone_to_cpu(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_clone_to_cpu(item) for item in value)
+    return copy.deepcopy(value)
+
+
+def _actual_cuda_device(device: torch.device) -> str | None:
+    """Resolve ``cuda`` to the concrete logical device whose RNG is in use."""
+
+    if device.type != "cuda":
+        return None
+    index = torch.cuda.current_device() if device.index is None else device.index
+    return f"cuda:{index}"
+
+
+def build_training_checkpoint(
+    *,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    permutation_generator: torch.Generator,
+    device: torch.device,
+    epoch: int,
+    next_epoch: int,
+    history: list[dict[str, Any]],
+    best_state: dict[str, torch.Tensor],
+    best_score: float,
+    best_epoch: int,
+    optimizer_steps: int,
+    fixed_log_kappa: float,
+    fixed_log_kappa_source: str,
+    distillation_evidence: dict[str, Any] | None,
+    timing_seconds: dict[str, float],
+    device_memory: dict[str, int] | None,
+    training_semantics: dict,
+    frozen_input_hashes: dict,
+) -> dict[str, Any]:
+    """Snapshot every mutable value at a completed validation boundary."""
+
+    if next_epoch != epoch + 1:
+        raise ValueError("next_epoch must identify the epoch after the checkpoint")
+    generator_device = torch.device(permutation_generator.device)
+    if generator_device.type != device.type or (
+        device.type == "cuda"
+        and _actual_cuda_device(generator_device) != _actual_cuda_device(device)
+    ):
+        raise ValueError("permutation generator device does not match training device")
+    actual_cuda_device = _actual_cuda_device(device)
+    cuda_rng_state = None
+    if actual_cuda_device is not None:
+        cuda_rng_state = (
+            torch.cuda.get_rng_state(torch.device(actual_cuda_device))
+            .detach()
+            .cpu()
+            .clone()
+        )
+    payload = {
+        "schema": TRAINING_CHECKPOINT_SCHEMA,
+        "training_semantics": copy.deepcopy(training_semantics),
+        "frozen_input_hashes": copy.deepcopy(frozen_input_hashes),
+        "epoch": int(epoch),
+        "next_epoch": int(next_epoch),
+        "current_model_state_dict": _clone_to_cpu(model.state_dict()),
+        "optimizer_state_dict": _clone_to_cpu(optimizer.state_dict()),
+        "permutation_generator_state": (
+            permutation_generator.get_state().detach().cpu().clone()
+        ),
+        "cpu_rng_state": torch.get_rng_state().detach().cpu().clone(),
+        "cuda_rng_state": cuda_rng_state,
+        "cuda_rng_device": actual_cuda_device,
+        "history": copy.deepcopy(history),
+        "best_state_dict": _clone_to_cpu(best_state),
+        "best_score": float(best_score),
+        "best_epoch": int(best_epoch),
+        "optimizer_steps": int(optimizer_steps),
+        "fixed_log_kappa": float(fixed_log_kappa),
+        "fixed_log_kappa_source": str(fixed_log_kappa_source),
+        "distillation_evidence": copy.deepcopy(distillation_evidence),
+        "timing_seconds": {key: float(value) for key, value in timing_seconds.items()},
+        "device_memory": copy.deepcopy(device_memory),
+    }
+    validate_training_checkpoint(
+        payload,
+        training_semantics=training_semantics,
+        frozen_input_hashes=frozen_input_hashes,
+    )
+    return payload
+
+
+def save_training_checkpoint_atomic(path: Path, payload: dict) -> None:
+    """Atomically replace a checkpoint without exposing a partial torch file."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    os.close(descriptor)
+    temporary = Path(temporary_name)
+    try:
+        torch.save(payload, temporary)
+        with temporary.open("rb") as handle:
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def restore_training_checkpoint_state(
+    payload: dict,
+    *,
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    permutation_generator: torch.Generator,
+    device: torch.device,
+) -> None:
+    """Restore model, Adam, shuffle generator, and global Torch RNG streams."""
+
+    if device.type == "cuda" and not torch.cuda.is_available():
+        raise ValueError(
+            "resume checkpoint requires CUDA RNG state but CUDA is unavailable"
+        )
+    expected_cuda_device = _actual_cuda_device(device)
+    if payload["cuda_rng_device"] != expected_cuda_device:
+        raise ValueError(
+            "resume checkpoint CUDA RNG device does not match the actual device"
+        )
+    generator_device = torch.device(permutation_generator.device)
+    if generator_device.type != device.type or (
+        device.type == "cuda"
+        and _actual_cuda_device(generator_device) != expected_cuda_device
+    ):
+        raise ValueError("permutation generator device does not match training device")
+    model.load_state_dict(payload["current_model_state_dict"], strict=True)
+    optimizer.load_state_dict(payload["optimizer_state_dict"])
+    permutation_generator.set_state(
+        payload["permutation_generator_state"].detach().cpu()
+    )
+    torch.set_rng_state(payload["cpu_rng_state"].detach().cpu())
+    if expected_cuda_device is not None:
+        torch.cuda.set_rng_state(
+            payload["cuda_rng_state"].detach().cpu(),
+            device=torch.device(expected_cuda_device),
+        )
+
+
+def resumed_training_is_complete(payload: dict, *, requested_epochs: int) -> bool:
+    """Return whether a validated boundary already satisfies the request."""
+
+    return int(payload["next_epoch"]) > int(requested_epochs)
 
 
 def inherited_bond_gradient_mask(parameter, inherited_bond_dimension: int):
@@ -487,10 +968,7 @@ def apply_fermat_action_torch(
         raise ValueError("Fermat action data must contain five coordinates")
     real_dtype = values.real.dtype
     angles = (
-        2.0
-        * math.pi
-        * phase_exponents.to(dtype=real_dtype, device=values.device)
-        / 5.0
+        2.0 * math.pi * phase_exponents.to(dtype=real_dtype, device=values.device) / 5.0
     )
     phases = torch.polar(torch.ones_like(angles), angles).to(dtype=values.dtype)
     permutation = permutation.to(dtype=torch.long, device=values.device)
@@ -585,9 +1063,7 @@ def reynolds_teacher_log_feature_norm(
                 transformed = block[:, permutation] * phases[None, :]
                 row = teacher.log_feature_norm(transformed)
                 accumulated = (
-                    row
-                    if accumulated is None
-                    else torch.logaddexp(accumulated, row)
+                    row if accumulated is None else torch.logaddexp(accumulated, row)
                 )
             targets[start:stop] = accumulated - math.log(len(actions))
     return targets
@@ -640,9 +1116,7 @@ def veronese_source_features_numpy(
     for left in range(5):
         for right in range(left, 5):
             normalization = 1.0 if left == right else math.sqrt(2.0)
-            values.append(
-                normalization * points[:, left] * points[:, right]
-            )
+            values.append(normalization * points[:, left] * points[:, right])
             jets.append(
                 normalization
                 * (
@@ -739,14 +1213,20 @@ def evaluate_raw(
             )
             eigenvalues = torch.linalg.eigvalsh(metric)
             if not bool(torch.all(torch.isfinite(eigenvalues))):
-                raise FloatingPointError("nonfinite metric eigenvalue during evaluation")
+                raise FloatingPointError(
+                    "nonfinite metric eigenvalue during evaluation"
+                )
             if not bool(torch.all(eigenvalues > 0)):
                 raise FloatingPointError("nonpositive tensor-network metric")
             raw = torch.sum(torch.log(eigenvalues), dim=1)
             raw -= dataset["log_omega"][start:stop]
             raw_rows.append(raw.detach().cpu().numpy().astype(np.float64))
             minimum_rows.append(
-                torch.min(eigenvalues, dim=1).values.detach().cpu().numpy().astype(np.float64)
+                torch.min(eigenvalues, dim=1)
+                .values.detach()
+                .cpu()
+                .numpy()
+                .astype(np.float64)
             )
     return np.concatenate(raw_rows), np.concatenate(minimum_rows)
 
@@ -840,9 +1320,7 @@ def evaluate_split(
 ) -> tuple[dict[str, Any], np.ndarray, np.ndarray, np.ndarray]:
     raw, minimum = evaluate_raw(model, dataset, chunk_size=args.eval_batch_size)
     normalized, ratio = ratio_statistics(raw, dataset["weights_numpy"], minimum)
-    fixed = fixed_kappa_statistics(
-        raw, dataset["weights_numpy"], fixed_log_kappa, args
-    )
+    fixed = fixed_kappa_statistics(raw, dataset["weights_numpy"], fixed_log_kappa, args)
     if getattr(args, "checkpoint_score_kind", "energy") == "sigma":
         fixed["selection_score"] = normalized["sigma_official_formula"]
     return {"normalized_volume": normalized, **fixed}, raw, ratio, minimum
@@ -911,9 +1389,10 @@ def model_payload(
     fixed_log_kappa: float,
     source_hashes: dict[str, str],
     initial_model_evidence: dict[str, Any] | None,
+    fixed_log_kappa_source: str | None = None,
 ) -> dict[str, Any]:
     total_degree = args.source_degree * args.site_count
-    return {
+    payload = {
         "schema": "quintic-positive-tensor-network-v1",
         "geometry": "Fermat quintic hypersurface X_5 in P^4",
         "state_dict": state,
@@ -924,15 +1403,11 @@ def model_payload(
         "physical_dictionary_rank": args.dictionary_rank,
         "output_dimension": model.output_dimension,
         "architecture": model.architecture,
-        "fermat_phase_charge_multiplicity": (
-            args.fermat_phase_charge_multiplicity
-        ),
+        "fermat_phase_charge_multiplicity": (args.fermat_phase_charge_multiplicity),
         "fermat_s5_orbit_tying": args.fermat_s5_orbit_tying,
         "fermat_two_site_blocking": args.fermat_two_site_blocking,
         "fermat_two_site_block_starts": (
-            list(range(0, args.site_count, 2))
-            if args.fermat_two_site_blocking
-            else []
+            list(range(0, args.site_count, 2)) if args.fermat_two_site_blocking else []
         ),
         "fermat_block_compact_storage": args.fermat_two_site_blocking,
         "hard_symmetry": (
@@ -959,10 +1434,20 @@ def model_payload(
         "positive_floor": args.positive_floor,
         "precision": args.precision,
         "fixed_log_kappa": fixed_log_kappa,
-        "fixed_log_kappa_source": "fubini_study_metric_on_fixed_training_pool",
+        "fixed_log_kappa_source": (
+            fixed_log_kappa_source or "fubini_study_metric_on_fixed_training_pool"
+        ),
         "source_sha256": source_hashes,
         "continuation_initial_model": initial_model_evidence,
     }
+    if initial_model_evidence is not None and isinstance(
+        initial_model_evidence.get("bond_expansion"), dict
+    ):
+        # Preserve the exact inherited block across multi-round new-channel stages.
+        payload["bond_expansion"] = copy.deepcopy(
+            initial_model_evidence["bond_expansion"]
+        )
+    return payload
 
 
 def exact_fs_reference_model(
@@ -1014,6 +1499,9 @@ def main() -> None:
     output_dir = args.output_dir.expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     status_path = output_dir / "status.json"
+    model_path = output_dir / "best_tensor_network.pt"
+    report_path = output_dir / "report.json"
+    arrays_path = output_dir / "blind_test_tail_arrays.npz"
     write_json(status_path, {"state": "running", "phase": "initializing"})
 
     try:
@@ -1026,7 +1514,9 @@ def main() -> None:
         complex_dtype = (
             torch.complex64 if args.precision == "complex64" else torch.complex128
         )
-        real_dtype = torch.float32 if complex_dtype == torch.complex64 else torch.float64
+        real_dtype = (
+            torch.float32 if complex_dtype == torch.complex64 else torch.float64
+        )
         torch.manual_seed(args.torch_seed)
         if device.type == "cuda":
             torch.cuda.manual_seed_all(args.torch_seed)
@@ -1042,18 +1532,23 @@ def main() -> None:
         validation_pullbacks_path = pullbacks_dir / "validation_pullbacks.npy"
         blind_pullbacks_path = pullbacks_dir / "blind_pullbacks.npy"
         official_fs_metrics_path = pullbacks_dir / "validation_official_fs_metrics.npy"
-        required = (
+        required = [
             dataset_path,
             basis_path,
-            blind_path,
-            cymetric_arrays_path,
-            source_report_path,
             pullback_report_path,
             train_pullbacks_path,
             validation_pullbacks_path,
-            blind_pullbacks_path,
             official_fs_metrics_path,
-        )
+        ]
+        if not args.skip_blind_audit:
+            required.extend(
+                (
+                    source_report_path,
+                    blind_path,
+                    cymetric_arrays_path,
+                    blind_pullbacks_path,
+                )
+            )
         for path in required:
             if not path.exists():
                 raise FileNotFoundError(path)
@@ -1061,22 +1556,36 @@ def main() -> None:
         source_hashes = {
             "dataset": sha256_file(dataset_path),
             "basis": sha256_file(basis_path),
-            "blind_points": sha256_file(blind_path),
-            "cymetric_tail": sha256_file(cymetric_arrays_path),
         }
+        if not args.skip_blind_audit:
+            source_hashes.update(
+                {
+                    "blind_points": sha256_file(blind_path),
+                    "cymetric_tail": sha256_file(cymetric_arrays_path),
+                }
+            )
         pullback_report = json.loads(pullback_report_path.read_text(encoding="utf-8"))
-        if pullback_report.get("source_sha256") != source_hashes:
+        registered_source_hashes = pullback_report.get("source_sha256")
+        if not isinstance(registered_source_hashes, dict) or any(
+            registered_source_hashes.get(name) != digest
+            for name, digest in source_hashes.items()
+        ):
             raise RuntimeError("pullbacks do not match the fixed source arrays")
         pullback_paths = {
             "train": train_pullbacks_path,
             "validation": validation_pullbacks_path,
-            "blind": blind_pullbacks_path,
             "validation_official_fs_metrics": official_fs_metrics_path,
         }
+        if not args.skip_blind_audit:
+            pullback_paths["blind"] = blind_pullbacks_path
         pullback_hashes = {
             name: sha256_file(path) for name, path in pullback_paths.items()
         }
-        if pullback_report.get("output_sha256") != pullback_hashes:
+        registered_pullback_hashes = pullback_report.get("output_sha256")
+        if not isinstance(registered_pullback_hashes, dict) or any(
+            registered_pullback_hashes.get(name) != digest
+            for name, digest in pullback_hashes.items()
+        ):
             raise RuntimeError("pullback hashes do not match their registered report")
 
         data = np.load(dataset_path, allow_pickle=False)
@@ -1124,6 +1633,7 @@ def main() -> None:
         reference_h = np.eye(source_section_count, dtype=np.complex128)
         target_normalization = 1.0 / (math.pi * total_degree)
         initial_model_payload = None
+        initial_model_path = None
         initial_model_evidence = None
         if args.initial_model is None:
             if args.fermat_phase_charge_multiplicity:
@@ -1246,9 +1756,7 @@ def main() -> None:
                     raise ValueError(
                         "inherited bond freezing requires a bond-expanded artifact"
                     )
-                observed_inherited = int(
-                    expansion.get("source_bond_dimension", -1)
-                )
+                observed_inherited = int(expansion.get("source_bond_dimension", -1))
                 if observed_inherited != args.freeze_inherited_bond_dimension:
                     raise ValueError(
                         "bond expansion source dimension does not match "
@@ -1259,6 +1767,10 @@ def main() -> None:
                 "sha256": sha256_file(initial_model_path),
                 **observed_metadata,
             }
+            if isinstance(initial_model_payload.get("bond_expansion"), dict):
+                initial_model_evidence["bond_expansion"] = copy.deepcopy(
+                    initial_model_payload["bond_expansion"]
+                )
         model = PositiveTensorNetworkMetric(
             reference_h,
             site_count=args.site_count,
@@ -1277,9 +1789,7 @@ def main() -> None:
             device=device,
         )
         blocked_pair_starts = (
-            tuple(range(0, args.site_count, 2))
-            if args.fermat_two_site_blocking
-            else ()
+            tuple(range(0, args.site_count, 2)) if args.fermat_two_site_blocking else ()
         )
         blocked_projection_errors = ()
         if blocked_pair_starts:
@@ -1299,14 +1809,15 @@ def main() -> None:
         if initial_model_payload is not None:
             model.load_state_dict(initial_model_payload["state_dict"], strict=True)
         parameter_count = int(model.trainable_real_parameter_count)
-        if args.expected_parameter_count and parameter_count != args.expected_parameter_count:
+        if (
+            args.expected_parameter_count
+            and parameter_count != args.expected_parameter_count
+        ):
             raise RuntimeError(
                 f"parameter-count gate failed: {parameter_count} != "
                 f"{args.expected_parameter_count}"
             )
-        model.physical_dictionary.requires_grad_(
-            not args.freeze_physical_dictionary
-        )
+        model.physical_dictionary.requires_grad_(not args.freeze_physical_dictionary)
         coefficient_gradient_masks = []
         coefficient_orbit_labels = []
         gradient_hook_handles = []
@@ -1323,8 +1834,7 @@ def main() -> None:
                     )
                 )
         elif (
-            args.fermat_phase_charge_multiplicity
-            and not args.fermat_two_site_blocking
+            args.fermat_phase_charge_multiplicity and not args.fermat_two_site_blocking
         ):
             coefficient_gradient_masks = fermat_phase_charge_gradient_masks(
                 model,
@@ -1379,8 +1889,7 @@ def main() -> None:
             )
         elif coefficient_orbit_labels:
             active_parameter_count = 2 * sum(
-                int(torch.max(labels).item()) + 1
-                for labels in coefficient_orbit_labels
+                int(torch.max(labels).item()) + 1 for labels in coefficient_orbit_labels
             )
         elif coefficient_gradient_masks:
             active_parameter_count = int(
@@ -1400,12 +1909,179 @@ def main() -> None:
                 for parameter in active_parameters
             )
 
-        distillation_evidence = None
-        distillation_seconds = 0.0
-        if args.distillation_epochs:
-            teacher_path = args.distillation_teacher_model.expanduser().resolve()
-            if not teacher_path.exists():
-                raise FileNotFoundError(teacher_path)
+        teacher_path = (
+            None
+            if not args.distillation_epochs
+            else args.distillation_teacher_model.expanduser().resolve()
+        )
+        if teacher_path is not None and not teacher_path.is_file():
+            raise FileNotFoundError(teacher_path)
+
+        frozen_input_paths = {path.expanduser().resolve() for path in required}
+        frozen_input_hashes = {
+            "dataset_sha256": source_hashes["dataset"],
+            "basis_sha256": source_hashes["basis"],
+            "source_report_sha256": (
+                None if args.skip_blind_audit else sha256_file(source_report_path)
+            ),
+            "pullback_report_sha256": sha256_file(pullback_report_path),
+            "train_pullbacks_sha256": pullback_hashes["train"],
+            "validation_pullbacks_sha256": pullback_hashes["validation"],
+            "validation_official_fs_metrics_sha256": pullback_hashes[
+                "validation_official_fs_metrics"
+            ],
+            "blind_points_sha256": source_hashes.get("blind_points"),
+            "cymetric_tail_sha256": source_hashes.get("cymetric_tail"),
+            "blind_pullbacks_sha256": pullback_hashes.get("blind"),
+            "initial_model_sha256": (
+                None if initial_model_path is None else sha256_file(initial_model_path)
+            ),
+            "distillation_teacher_model_sha256": (
+                None if teacher_path is None else sha256_file(teacher_path)
+            ),
+        }
+        if initial_model_path is not None:
+            frozen_input_paths.add(initial_model_path)
+        if teacher_path is not None:
+            frozen_input_paths.add(teacher_path)
+
+        parameter_scope = parameter_scope_from_args(args)
+        training_semantics = {
+            "schema": "quintic-positive-tensor-network-training-semantics-v1",
+            "model": {
+                "source_degree": args.source_degree,
+                "site_count": args.site_count,
+                "bond_dimension": args.bond_dimension,
+                "dictionary_rank": args.dictionary_rank,
+                "output_dimension": output_dimension,
+                "expected_parameter_count": args.expected_parameter_count,
+                "positive_floor": args.positive_floor,
+                "initialization_noise": args.initialization_noise,
+                "dictionary_seed": args.dictionary_seed,
+                "torch_seed": args.torch_seed,
+                "precision": args.precision,
+                "transfer_implementation": args.transfer_implementation,
+                "fermat_phase_charge_multiplicity": (
+                    args.fermat_phase_charge_multiplicity
+                ),
+                "fermat_s5_orbit_tying": args.fermat_s5_orbit_tying,
+                "fermat_two_site_blocking": args.fermat_two_site_blocking,
+            },
+            "parameters": {
+                "scope": parameter_scope,
+                "freeze_physical_dictionary": args.freeze_physical_dictionary,
+                "freeze_inherited_bond_dimension": (
+                    args.freeze_inherited_bond_dimension
+                ),
+                "orthonormalize_every": args.orthonormalize_every,
+                "active_real_parameter_count": active_parameter_count,
+            },
+            "distillation": {
+                "enabled": bool(args.distillation_epochs),
+                "epochs": args.distillation_epochs,
+                "group_samples": args.distillation_group_samples,
+                "batch_size": args.distillation_batch_size,
+                "learning_rate": args.distillation_learning_rate,
+            },
+            "optimization": {
+                "optimizer": "torch.optim.Adam",
+                "epochs": args.epochs,
+                "batch_size": args.batch_size,
+                "eval_every": args.eval_every,
+                "eval_batch_size": args.eval_batch_size,
+                "learning_rate": args.learning_rate,
+                "gradient_clip_norm": args.gradient_clip_norm,
+                "log_energy_loss_weight": args.log_energy_loss_weight,
+                "ma_loss_weight": args.ma_loss_weight,
+                "ma_loss_kind": args.ma_loss_kind,
+                "tail_loss_weight": args.tail_loss_weight,
+                "tail_fraction": args.tail_fraction,
+                "tail_loss_kind": args.tail_loss_kind,
+                "tail_ratio_threshold": args.tail_ratio_threshold,
+                "tail_smooth_temperature": args.tail_smooth_temperature,
+                "fermat_symmetry_loss_weight": args.fermat_symmetry_loss_weight,
+                "checkpoint_log_energy_weight": (args.checkpoint_log_energy_weight),
+                "checkpoint_ma_weight": args.checkpoint_ma_weight,
+                "checkpoint_tail_weight": args.checkpoint_tail_weight,
+                "checkpoint_score_kind": args.checkpoint_score_kind,
+                "full_epoch_gradient": args.full_epoch_gradient,
+                "training_logdet_method": args.training_logdet_method,
+                "fixed_log_kappa_requested": args.fixed_log_kappa,
+            },
+            "data": {
+                "train_limit": args.train_limit,
+                "validation_limit": args.validation_limit,
+                "test_limit": args.test_limit,
+                "test_batch_size": args.test_batch_size,
+            },
+            "evaluation": {
+                "scope": (
+                    "development_only"
+                    if args.skip_blind_audit
+                    else "development_and_blind"
+                ),
+                "skip_blind_audit": args.skip_blind_audit,
+            },
+            "device": str(device),
+            "implementation": {
+                "trainer_sha256": sha256_file(Path(__file__).resolve()),
+                "support_script_sha256": sha256_file(
+                    ROOT / "scripts" / "train_quintic_full_h_same_points.py"
+                ),
+                "gcicy_metric_python_sha256": sha256_python_tree(ROOT / "gcicy_metric"),
+                "python_version": sys.version,
+                "numpy_version": np.__version__,
+                "torch_version": str(torch.__version__),
+            },
+        }
+
+        resume_checkpoint_path = (
+            None
+            if args.resume_checkpoint is None
+            else args.resume_checkpoint.expanduser().resolve()
+        )
+        if resume_checkpoint_path is not None and not resume_checkpoint_path.is_file():
+            raise FileNotFoundError(resume_checkpoint_path)
+        checkpoint_path = (
+            args.checkpoint.expanduser().resolve()
+            if args.checkpoint is not None
+            else resume_checkpoint_path
+        )
+        if checkpoint_path is not None:
+            validate_checkpoint_paths(
+                checkpoint_path=checkpoint_path,
+                resume_checkpoint_path=resume_checkpoint_path,
+                model_path=model_path,
+                report_path=report_path,
+                frozen_input_paths=frozen_input_paths,
+            )
+
+        resume_payload = None
+        resume_checkpoint_sha256 = None
+        if resume_checkpoint_path is not None:
+            resume_checkpoint_sha256 = sha256_file(resume_checkpoint_path)
+            resume_payload = torch.load(
+                resume_checkpoint_path,
+                map_location="cpu",
+                weights_only=False,
+            )
+            validate_training_checkpoint(
+                resume_payload,
+                training_semantics=training_semantics,
+                frozen_input_hashes=frozen_input_hashes,
+            )
+
+        distillation_evidence = (
+            None
+            if resume_payload is None
+            else copy.deepcopy(resume_payload["distillation_evidence"])
+        )
+        distillation_seconds = (
+            0.0
+            if resume_payload is None
+            else float(resume_payload["timing_seconds"]["distillation"])
+        )
+        if args.distillation_epochs and resume_payload is None:
             teacher_payload = torch.load(
                 teacher_path,
                 map_location="cpu",
@@ -1436,9 +2112,7 @@ def main() -> None:
             teacher.requires_grad_(False)
             teacher.eval()
 
-            distillation_batch_size = (
-                args.distillation_batch_size or args.batch_size
-            )
+            distillation_batch_size = args.distillation_batch_size or args.batch_size
             action_generator = torch.Generator(device=device)
             action_generator.manual_seed(args.torch_seed + 1009)
             actions = fixed_fermat_actions_torch(
@@ -1581,10 +2255,7 @@ def main() -> None:
                         args.gradient_clip_norm,
                     )
                     distillation_optimizer.step()
-                    if (
-                        args.fermat_s5_orbit_tying
-                        and not args.fermat_two_site_blocking
-                    ):
+                    if args.fermat_s5_orbit_tying and not args.fermat_two_site_blocking:
                         project_coefficient_cores_to_s5_orbits_(
                             model,
                             coefficient_orbit_labels,
@@ -1631,7 +2302,23 @@ def main() -> None:
         fs_check = fs_reproduction_check(
             reference_model, validation, official_fs_metrics_path
         )
-        if args.fixed_log_kappa is None:
+        expected_fixed_log_kappa_source = (
+            "fubini_study_metric_on_selected_training_pool"
+            if args.fixed_log_kappa is None
+            else "registered_command_line_value"
+        )
+        if resume_payload is not None:
+            if (
+                resume_payload["fixed_log_kappa_source"]
+                != expected_fixed_log_kappa_source
+            ):
+                raise ValueError(
+                    "resume checkpoint fixed_log_kappa source does not match "
+                    "the request"
+                )
+            fixed_log_kappa = float(resume_payload["fixed_log_kappa"])
+            fixed_log_kappa_source = str(resume_payload["fixed_log_kappa_source"])
+        elif args.fixed_log_kappa is None:
             fs_train_raw, _ = evaluate_raw(
                 reference_model, train, chunk_size=args.eval_batch_size
             )
@@ -1648,71 +2335,46 @@ def main() -> None:
         optimizer = torch.optim.Adam(active_parameters, lr=args.learning_rate)
         generator = torch.Generator(device=device)
         generator.manual_seed(args.torch_seed + 1)
-        best_state = copy.deepcopy(
-            {key: value.detach().cpu() for key, value in model.state_dict().items()}
-        )
+        best_state = _clone_to_cpu(model.state_dict())
         best_score = float("inf")
         best_epoch = 0
         history: list[dict[str, Any]] = []
         optimizer_steps = 0
+        starting_epoch = 1
+        last_checkpoint_epoch = None
+        accumulated_training_seconds = 0.0
+        accumulated_wall_seconds = 0.0
+        accumulated_device_memory = None
+        if resume_payload is not None:
+            restore_training_checkpoint_state(
+                resume_payload,
+                model=model,
+                optimizer=optimizer,
+                permutation_generator=generator,
+                device=device,
+            )
+            history = copy.deepcopy(resume_payload["history"])
+            best_state = _clone_to_cpu(resume_payload["best_state_dict"])
+            best_score = float(resume_payload["best_score"])
+            best_epoch = int(resume_payload["best_epoch"])
+            optimizer_steps = int(resume_payload["optimizer_steps"])
+            starting_epoch = int(resume_payload["next_epoch"])
+            last_checkpoint_epoch = int(resume_payload["epoch"])
+            accumulated_training_seconds = float(
+                resume_payload["timing_seconds"]["training"]
+            )
+            accumulated_wall_seconds = float(
+                resume_payload["timing_seconds"]["wall_total"]
+            )
+            accumulated_device_memory = copy.deepcopy(resume_payload["device_memory"])
+            print(
+                f"resuming at epoch={starting_epoch} from " f"{resume_checkpoint_path}",
+                flush=True,
+            )
         training_started = time.perf_counter()
 
-        for epoch in range(args.epochs + 1):
-            if epoch % args.eval_every == 0 or epoch == args.epochs:
-                validation_row, _, _, _ = evaluate_split(
-                    model,
-                    validation,
-                    fixed_log_kappa=fixed_log_kappa,
-                    args=args,
-                )
-                row = {"epoch": epoch, **validation_row}
-                history.append(row)
-                score = float(row["selection_score"])
-                accepted = np.isfinite(score) and score < best_score
-                if accepted:
-                    best_score = score
-                    best_epoch = epoch
-                    best_state = copy.deepcopy(
-                        {
-                            key: value.detach().cpu()
-                            for key, value in model.state_dict().items()
-                        }
-                    )
-                write_json(output_dir / "training_history.json", {"rows": history})
-                torch.save(
-                    {
-                        "epoch": epoch,
-                        "model_state_dict": model.state_dict(),
-                        "optimizer_state_dict": optimizer.state_dict(),
-                        "best_state_dict": best_state,
-                        "best_epoch": best_epoch,
-                        "best_score": best_score,
-                        "fixed_log_kappa": fixed_log_kappa,
-                    },
-                    output_dir / "training_checkpoint.pt",
-                )
-                write_json(
-                    status_path,
-                    {
-                        "state": "running",
-                        "phase": "training",
-                        "epoch": epoch,
-                        "best_epoch": best_epoch,
-                        "latest": row,
-                    },
-                )
-                normalized = row["normalized_volume"]
-                print(
-                    f"epoch={epoch} score={score:.6e} "
-                    f"sigma={normalized['sigma_official_formula']:.6e} "
-                    f"chi={normalized['weighted_rms_abs_residual']:.6e} "
-                    f"rmax={normalized['ratio_weighted_quantiles']['q1.0000']:.6e} "
-                    f"accepted={accepted}",
-                    flush=True,
-                )
-            if epoch == args.epochs:
-                break
-
+        def train_one_epoch() -> None:
+            nonlocal optimizer_steps
             model.train()
             permutation = torch.randperm(
                 train["count"], generator=generator, device=device
@@ -1734,12 +2396,9 @@ def main() -> None:
                 ratio = torch.exp(torch.clamp(log_ratio, -20.0, 20.0))
                 log_energy = torch.sum(batch_weights * torch.square(log_ratio))
                 ma_energy = torch.sum(
-                    batch_weights
-                    * ma_point_losses_torch(ratio, kind=args.ma_loss_kind)
+                    batch_weights * ma_point_losses_torch(ratio, kind=args.ma_loss_kind)
                 )
-                symmetry_energy = torch.zeros(
-                    (), dtype=real_dtype, device=device
-                )
+                symmetry_energy = torch.zeros((), dtype=real_dtype, device=device)
                 if args.fermat_symmetry_loss_weight:
                     transformed_values, transformed_derivatives = (
                         random_fermat_action_torch(
@@ -1774,8 +2433,7 @@ def main() -> None:
                     log_energy = 0.5 * (log_energy + transformed_log_energy)
                     ma_energy = 0.5 * (ma_energy + transformed_ma_energy)
                     symmetry_energy = torch.sum(
-                        batch_weights
-                        * torch.square(transformed_log_ratio - log_ratio)
+                        batch_weights * torch.square(transformed_log_ratio - log_ratio)
                     )
                 if args.tail_loss_weight:
                     tail_point_losses = tail_point_losses_torch(
@@ -1798,17 +2456,16 @@ def main() -> None:
                     + args.tail_loss_weight * tail_energy
                     + args.fermat_symmetry_loss_weight * symmetry_energy
                 )
-                torch._assert_async(torch.isfinite(loss), "nonfinite training objective")
+                torch._assert_async(
+                    torch.isfinite(loss), "nonfinite training objective"
+                )
                 loss.backward()
                 if not args.full_epoch_gradient:
                     torch.nn.utils.clip_grad_norm_(
                         active_parameters, args.gradient_clip_norm
                     )
                     optimizer.step()
-                    if (
-                        args.fermat_s5_orbit_tying
-                        and not args.fermat_two_site_blocking
-                    ):
+                    if args.fermat_s5_orbit_tying and not args.fermat_two_site_blocking:
                         project_coefficient_cores_to_s5_orbits_(
                             model,
                             coefficient_orbit_labels,
@@ -1832,10 +2489,7 @@ def main() -> None:
                     active_parameters, args.gradient_clip_norm
                 )
                 optimizer.step()
-                if (
-                    args.fermat_s5_orbit_tying
-                    and not args.fermat_two_site_blocking
-                ):
+                if args.fermat_s5_orbit_tying and not args.fermat_two_site_blocking:
                     project_coefficient_cores_to_s5_orbits_(
                         model,
                         coefficient_orbit_labels,
@@ -1855,7 +2509,103 @@ def main() -> None:
             ):
                 model.orthonormalize_physical_dictionary_()
 
-        training_seconds = time.perf_counter() - training_started
+        def evaluate_and_record(epoch: int) -> None:
+            nonlocal best_epoch
+            nonlocal best_score
+            nonlocal best_state
+
+            validation_row, _, _, _ = evaluate_split(
+                model,
+                validation,
+                fixed_log_kappa=fixed_log_kappa,
+                args=args,
+            )
+            row = {"epoch": epoch, **validation_row}
+            history.append(row)
+            score = float(row["selection_score"])
+            accepted = np.isfinite(score) and score < best_score
+            if accepted:
+                best_score = score
+                best_epoch = epoch
+                best_state = _clone_to_cpu(model.state_dict())
+            write_json(output_dir / "training_history.json", {"rows": history})
+            write_json(
+                status_path,
+                {
+                    "state": "running",
+                    "phase": "training",
+                    "epoch": epoch,
+                    "best_epoch": best_epoch,
+                    "latest": row,
+                },
+            )
+            normalized = row["normalized_volume"]
+            print(
+                f"epoch={epoch} score={score:.6e} "
+                f"sigma={normalized['sigma_official_formula']:.6e} "
+                f"chi={normalized['weighted_rms_abs_residual']:.6e} "
+                f"rmax={normalized['ratio_weighted_quantiles']['q1.0000']:.6e} "
+                f"accepted={accepted}",
+                flush=True,
+            )
+
+        def accumulated_timing() -> dict[str, float]:
+            now = time.perf_counter()
+            return {
+                "distillation": float(distillation_seconds),
+                "training": (accumulated_training_seconds + now - training_started),
+                "wall_total": accumulated_wall_seconds + now - started,
+            }
+
+        def save_checkpoint(epoch: int) -> None:
+            nonlocal last_checkpoint_epoch
+
+            if checkpoint_path is None:
+                return
+            checkpoint_payload = build_training_checkpoint(
+                model=model,
+                optimizer=optimizer,
+                permutation_generator=generator,
+                device=device,
+                epoch=epoch,
+                next_epoch=epoch + 1,
+                history=history,
+                best_state=best_state,
+                best_score=best_score,
+                best_epoch=best_epoch,
+                optimizer_steps=optimizer_steps,
+                fixed_log_kappa=fixed_log_kappa,
+                fixed_log_kappa_source=fixed_log_kappa_source,
+                distillation_evidence=distillation_evidence,
+                timing_seconds=accumulated_timing(),
+                device_memory=merge_device_memory(
+                    accumulated_device_memory,
+                    current_device_memory(device),
+                ),
+                training_semantics=training_semantics,
+                frozen_input_hashes=frozen_input_hashes,
+            )
+            save_training_checkpoint_atomic(checkpoint_path, checkpoint_payload)
+            last_checkpoint_epoch = epoch
+            print(f"checkpointed epoch={epoch} to {checkpoint_path}", flush=True)
+
+        if resume_payload is None:
+            evaluate_and_record(0)
+            save_checkpoint(0)
+        else:
+            # Refresh a distinct checkpoint target immediately.  If the supplied
+            # boundary is terminal, the loop below is empty and publication starts.
+            save_checkpoint(int(resume_payload["epoch"]))
+
+        for epoch in range(starting_epoch, args.epochs + 1):
+            train_one_epoch()
+            if epoch % args.eval_every == 0 or epoch == args.epochs:
+                evaluate_and_record(epoch)
+                save_checkpoint(epoch)
+
+        training_seconds = (
+            accumulated_training_seconds + time.perf_counter() - training_started
+        )
         model.load_state_dict(best_state)
         final_validation, _, _, _ = evaluate_split(
             model,
@@ -1864,65 +2614,83 @@ def main() -> None:
             args=args,
         )
 
-        write_json(status_path, {"state": "running", "phase": "blind_audit"})
-        blind = np.load(blind_path, allow_pickle=False)
-        blind_x = np.asarray(blind["X"], dtype=np.float32)
-        blind_weights = np.asarray(blind["weights"], dtype=np.float64)
-        blind_omega = np.asarray(blind["omega_squared"], dtype=np.float64)
-        blind_pullbacks = np.load(blind_pullbacks_path, mmap_mode="r")
-        if len(blind_x) != len(blind_pullbacks):
-            raise RuntimeError("blind point and pullback counts disagree")
-        if args.test_limit:
-            blind_x = blind_x[: args.test_limit]
-            blind_weights = blind_weights[: args.test_limit]
-            blind_omega = blind_omega[: args.test_limit]
-            blind_pullbacks = blind_pullbacks[: args.test_limit]
-        blind_raw = np.empty(len(blind_x), dtype=np.float64)
-        blind_minimum = np.empty(len(blind_x), dtype=np.float64)
-        blind_started = time.perf_counter()
-        for start in range(0, len(blind_x), args.test_batch_size):
-            stop = min(start + args.test_batch_size, len(blind_x))
-            values, derivatives = source_features(
-                blind_x[start:stop],
-                blind_pullbacks[start:stop],
-                source_degree=args.source_degree,
-                complex_dtype=complex_dtype,
-                device=device,
+        evaluation_scope = (
+            "development_only" if args.skip_blind_audit else "development_and_blind"
+        )
+        blind_seconds = 0.0
+        blind_count = None
+        blind_arrays_sha256 = None
+        blind_test_report: dict[str, Any] = {
+            "status": "skipped",
+            "reason": "--skip-blind-audit",
+        }
+        if not args.skip_blind_audit:
+            write_json(status_path, {"state": "running", "phase": "blind_audit"})
+            blind = np.load(blind_path, allow_pickle=False)
+            blind_x = np.asarray(blind["X"], dtype=np.float32)
+            blind_weights = np.asarray(blind["weights"], dtype=np.float64)
+            blind_omega = np.asarray(blind["omega_squared"], dtype=np.float64)
+            blind_pullbacks = np.load(blind_pullbacks_path, mmap_mode="r")
+            if len(blind_x) != len(blind_pullbacks):
+                raise RuntimeError("blind point and pullback counts disagree")
+            if args.test_limit:
+                blind_x = blind_x[: args.test_limit]
+                blind_weights = blind_weights[: args.test_limit]
+                blind_omega = blind_omega[: args.test_limit]
+                blind_pullbacks = blind_pullbacks[: args.test_limit]
+            blind_raw = np.empty(len(blind_x), dtype=np.float64)
+            blind_minimum = np.empty(len(blind_x), dtype=np.float64)
+            blind_started = time.perf_counter()
+            for start in range(0, len(blind_x), args.test_batch_size):
+                stop = min(start + args.test_batch_size, len(blind_x))
+                values, derivatives = source_features(
+                    blind_x[start:stop],
+                    blind_pullbacks[start:stop],
+                    source_degree=args.source_degree,
+                    complex_dtype=complex_dtype,
+                    device=device,
+                )
+                block = {
+                    "count": stop - start,
+                    "values": values,
+                    "derivatives": derivatives,
+                    "log_omega": torch.log(
+                        torch.tensor(
+                            blind_omega[start:stop],
+                            dtype=real_dtype,
+                            device=device,
+                        )
+                    ),
+                }
+                raw, minimum = evaluate_raw(
+                    model, block, chunk_size=args.test_batch_size
+                )
+                blind_raw[start:stop] = raw
+                blind_minimum[start:stop] = minimum
+            blind_seconds = time.perf_counter() - blind_started
+            blind_count = len(blind_x)
+            blind_weights_normalized = blind_weights / np.sum(blind_weights)
+            blind_statistics, blind_ratio = ratio_statistics(
+                blind_raw, blind_weights_normalized, blind_minimum
             )
-            block = {
-                "count": stop - start,
-                "values": values,
-                "derivatives": derivatives,
-                "log_omega": torch.log(
-                    torch.tensor(
-                        blind_omega[start:stop], dtype=real_dtype, device=device
-                    )
-                ),
+            blind_fixed = fixed_kappa_statistics(
+                blind_raw, blind_weights_normalized, fixed_log_kappa, args
+            )
+            np.savez_compressed(
+                arrays_path,
+                raw_log_volume_ratio=blind_raw,
+                normalized_ratio=blind_ratio,
+                min_eigenvalue=blind_minimum,
+                weights=blind_weights,
+                omega_squared=blind_omega,
+            )
+            blind_arrays_sha256 = sha256_file(arrays_path)
+            blind_test_report = {
+                "status": "complete",
+                "normalized_volume": blind_statistics,
+                **blind_fixed,
             }
-            raw, minimum = evaluate_raw(
-                model, block, chunk_size=args.test_batch_size
-            )
-            blind_raw[start:stop] = raw
-            blind_minimum[start:stop] = minimum
-        blind_seconds = time.perf_counter() - blind_started
-        blind_weights_normalized = blind_weights / np.sum(blind_weights)
-        blind_statistics, blind_ratio = ratio_statistics(
-            blind_raw, blind_weights_normalized, blind_minimum
-        )
-        blind_fixed = fixed_kappa_statistics(
-            blind_raw, blind_weights_normalized, fixed_log_kappa, args
-        )
 
-        arrays_path = output_dir / "blind_test_tail_arrays.npz"
-        np.savez_compressed(
-            arrays_path,
-            raw_log_volume_ratio=blind_raw,
-            normalized_ratio=blind_ratio,
-            min_eigenvalue=blind_minimum,
-            weights=blind_weights,
-            omega_squared=blind_omega,
-        )
-        model_path = output_dir / "best_tensor_network.pt"
         torch.save(
             model_payload(
                 model,
@@ -1931,24 +2699,29 @@ def main() -> None:
                 fixed_log_kappa=fixed_log_kappa,
                 source_hashes=source_hashes,
                 initial_model_evidence=initial_model_evidence,
+                fixed_log_kappa_source=fixed_log_kappa_source,
             ),
             model_path,
         )
 
-        source_report = json.loads(source_report_path.read_text(encoding="utf-8"))
+        source_report = load_source_report_for_evaluation(
+            source_report_path,
+            skip_blind_audit=args.skip_blind_audit,
+        )
         ambient_section_count = math.comb(total_degree + 4, 4)
         relation_section_count = (
             math.comb(total_degree - 1, 4) if total_degree >= 5 else 0
         )
         degree_k_section_count = ambient_section_count - relation_section_count
-        device_memory = None
-        if device.type == "cuda":
-            device_memory = {
-                "maximum_allocated_bytes": int(torch.cuda.max_memory_allocated(device)),
-                "maximum_reserved_bytes": int(torch.cuda.max_memory_reserved(device)),
-            }
+        device_memory = merge_device_memory(
+            accumulated_device_memory,
+            current_device_memory(device),
+        )
+        final_wall_seconds = accumulated_wall_seconds + time.perf_counter() - started
         report = {
             "schema": "quintic-positive-tensor-network-same-points-v1",
+            "evaluation_scope": evaluation_scope,
+            "termination_reason": "completed_requested_epochs",
             "scientific_scope": {
                 "geometry": "Fermat quintic hypersurface X_5 in P^4",
                 "equation": "z0^5 + z1^5 + z2^5 + z3^5 + z4^5 = 0",
@@ -1963,8 +2736,13 @@ def main() -> None:
                     f"k={total_degree}"
                 ),
                 "claim_limit": (
-                    "The common blind sample measures observed tails; it is not a "
-                    "deterministic global sup-norm certificate."
+                    "No blind sample was read; this development-only result cannot "
+                    "support blind-tail claims."
+                    if args.skip_blind_audit
+                    else (
+                        "The common blind sample measures observed tails; it is not "
+                        "a deterministic global sup-norm certificate."
+                    )
                 ),
             },
             "configuration": vars(args),
@@ -1999,9 +2777,7 @@ def main() -> None:
                     )
                 ),
                 "hard_fermat_symmetry": {
-                    "phase_subgroup": bool(
-                        args.fermat_phase_charge_multiplicity
-                    ),
+                    "phase_subgroup": bool(args.fermat_phase_charge_multiplicity),
                     "phase_charge_multiplicity": (
                         args.fermat_phase_charge_multiplicity
                     ),
@@ -2040,17 +2816,22 @@ def main() -> None:
             },
             "common_point_evidence": {
                 "source_run_dir": str(source_dir),
-                "blind_reference_run_dir": str(blind_source_dir),
+                "blind_reference_run_dir": (
+                    None if args.skip_blind_audit else str(blind_source_dir)
+                ),
                 "source_sha256": source_hashes,
                 "pullback_sha256": pullback_hashes,
-                "source_report_sha256": sha256_file(source_report_path),
-                "tensor_network_blind_arrays_sha256": sha256_file(arrays_path),
+                "source_report_sha256": (
+                    None if args.skip_blind_audit else sha256_file(source_report_path)
+                ),
+                "tensor_network_blind_arrays_sha256": blind_arrays_sha256,
                 "train_points": train["count"],
                 "validation_points": validation["count"],
-                "blind_points": len(blind_x),
+                "blind_points": blind_count,
                 "fs_reproduction": fs_check,
             },
             "training": {
+                "parameter_scope": parameter_scope,
                 "best_epoch": best_epoch,
                 "best_selection_score": best_score,
                 "fixed_log_kappa": fixed_log_kappa,
@@ -2081,21 +2862,47 @@ def main() -> None:
                 "final_validation": final_validation,
                 "history": history,
                 "optimizer_steps": optimizer_steps,
+                "checkpoint": {
+                    "enabled": checkpoint_path is not None,
+                    "path": (None if checkpoint_path is None else str(checkpoint_path)),
+                    "sha256": (
+                        None
+                        if checkpoint_path is None
+                        else sha256_file(checkpoint_path)
+                    ),
+                    "last_completed_validation_epoch": last_checkpoint_epoch,
+                    "resumed": resume_checkpoint_path is not None,
+                    "resumed_from": (
+                        None
+                        if resume_checkpoint_path is None
+                        else str(resume_checkpoint_path)
+                    ),
+                    "resumed_from_sha256": resume_checkpoint_sha256,
+                    "terminal_boundary_reused": (
+                        False
+                        if resume_payload is None
+                        else resumed_training_is_complete(
+                            resume_payload,
+                            requested_epochs=args.epochs,
+                        )
+                    ),
+                },
             },
-            "blind_test": {
-                "normalized_volume": blind_statistics,
-                **blind_fixed,
-            },
+            "blind_test": blind_test_report,
             "comparators": {
-                "official_cymetric_network": source_report.get("network"),
-                "official_cymetric_blind_test": source_report.get(
-                    "trained_phi_model"
+                "official_cymetric_network": (
+                    None if args.skip_blind_audit else source_report.get("network")
+                ),
+                "official_cymetric_blind_test": (
+                    None
+                    if args.skip_blind_audit
+                    else source_report.get("trained_phi_model")
                 ),
             },
             "artifacts": {
                 "model": str(model_path),
                 "model_sha256": sha256_file(model_path),
-                "blind_arrays": str(arrays_path),
+                "blind_arrays": (None if args.skip_blind_audit else str(arrays_path)),
             },
             "environment": {
                 "python": sys.version,
@@ -2109,10 +2916,9 @@ def main() -> None:
                 "distillation": distillation_seconds,
                 "training": training_seconds,
                 "blind_audit": blind_seconds,
-                "wall_total": time.perf_counter() - started,
+                "wall_total": final_wall_seconds,
             },
         }
-        report_path = output_dir / "report.json"
         write_json(report_path, report)
         write_json(
             status_path,
@@ -2121,10 +2927,20 @@ def main() -> None:
                 "phase": "complete",
                 "report": str(report_path),
                 "report_sha256": sha256_file(report_path),
-                "wall_seconds": time.perf_counter() - started,
+                "wall_seconds": final_wall_seconds,
             },
         )
-        print(json.dumps(report["blind_test"], indent=2), flush=True)
+        print(
+            json.dumps(
+                (
+                    report["blind_test"]
+                    if not args.skip_blind_audit
+                    else report["training"]["final_validation"]
+                ),
+                indent=2,
+            ),
+            flush=True,
+        )
     except Exception as error:
         write_json(
             status_path,

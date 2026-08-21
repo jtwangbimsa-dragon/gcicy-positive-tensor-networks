@@ -12,6 +12,13 @@ TESTS = (
     "tests/test_gcicy_tn_plateau_stage.py",
     "tests/test_gcicy_tn_study_arm.py",
     "tests/test_experiment_workflow.py",
+    "tests/test_quintic_positive_tensor_network_checkpoint.py",
+    "tests/test_quintic_positive_tensor_network_equivalence.py",
+    "tests/test_quintic_tn_plateau_stage.py",
+    "tests/test_quintic_tn_study_arm.py",
+    "tests/test_cast_positive_tensor_network_precision.py",
+    "tests/test_audit_quintic_tn_scaling_preflight.py",
+    "tests/test_quintic_experiment_manifest.py",
 )
 
 

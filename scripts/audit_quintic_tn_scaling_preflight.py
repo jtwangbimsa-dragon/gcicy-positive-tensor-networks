@@ -38,6 +38,14 @@ from scripts.train_quintic_positive_tensor_network_same_points import (  # noqa:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-dir", type=Path, required=True)
+    parser.add_argument(
+        "--run-report",
+        type=Path,
+        help=(
+            "explicit training report; defaults to RUN_DIR/report.json and is "
+            "useful for atomically published study-arm reports"
+        ),
+    )
     parser.add_argument("--source-run-dir", type=Path)
     parser.add_argument("--blind-reference-run-dir", type=Path)
     parser.add_argument("--pullbacks-dir", type=Path)
@@ -71,13 +79,13 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("batch and probe sizes must be positive")
     if args.gradient_batches <= 1 or min(args.gradient_batch_sizes) <= 0:
         raise ValueError("gradient audit needs at least two positive batches")
-    if not args.scales or any(not np.isfinite(value) or value <= 0 for value in args.scales):
+    if not args.scales or any(
+        not np.isfinite(value) or value <= 0 for value in args.scales
+    ):
         raise ValueError("purification scales must be finite and positive")
 
 
-def cast_artifact_precision(
-    payload: dict[str, Any], precision: str
-) -> dict[str, Any]:
+def cast_artifact_precision(payload: dict[str, Any], precision: str) -> dict[str, Any]:
     """Copy an artifact while consistently casting all floating tensors."""
 
     if precision not in {"complex64", "complex128"}:
@@ -138,25 +146,38 @@ def weighted_quantiles(
     cumulative /= cumulative[-1]
     result = {}
     for quantile in requested:
-        index = min(int(np.searchsorted(cumulative, quantile, side="left")), len(array) - 1)
+        index = min(
+            int(np.searchsorted(cumulative, quantile, side="left")), len(array) - 1
+        )
         result[f"q{quantile:.4f}"] = float(ordered[index])
     return result
 
 
 def _resolved_path(override: Path | None, configured: str) -> Path:
-    return (override if override is not None else Path(configured)).expanduser().resolve()
+    return (
+        (override if override is not None else Path(configured)).expanduser().resolve()
+    )
 
 
 def resolve_inputs(args: argparse.Namespace) -> dict[str, Path]:
     run_dir = args.run_dir.expanduser().resolve()
-    report_path = run_dir / "report.json"
+    report_path = (
+        args.run_report.expanduser().resolve()
+        if getattr(args, "run_report", None) is not None
+        else run_dir / "report.json"
+    )
     report = json.loads(report_path.read_text(encoding="utf-8"))
     configuration = report["configuration"]
-    model = args.model.expanduser().resolve() if args.model else run_dir / "best_tensor_network.pt"
-    source = _resolved_path(args.source_run_dir, configuration["source_run_dir"])
-    blind = _resolved_path(
-        args.blind_reference_run_dir, configuration["blind_reference_run_dir"]
+    model = (
+        args.model.expanduser().resolve()
+        if args.model
+        else run_dir / "best_tensor_network.pt"
     )
+    source = _resolved_path(args.source_run_dir, configuration["source_run_dir"])
+    configured_blind = configuration.get("blind_reference_run_dir")
+    if configured_blind is None:
+        configured_blind = configuration["source_run_dir"]
+    blind = _resolved_path(args.blind_reference_run_dir, configured_blind)
     pullbacks = _resolved_path(args.pullbacks_dir, configuration["pullbacks_dir"])
     output_override = getattr(args, "output", None)
     output = (
@@ -173,6 +194,25 @@ def resolve_inputs(args: argparse.Namespace) -> dict[str, Path]:
         "pullbacks": pullbacks,
         "output": output,
     }
+
+
+def audited_input_hashes(paths: dict[str, Path], split: str) -> dict[str, str]:
+    """Hash exactly the numerical inputs read for the selected audit split."""
+
+    hashes = {
+        "dataset": sha256_file(paths["source"] / "training_data" / "dataset.npz"),
+        "pullback_report": sha256_file(paths["pullbacks"] / "report.json"),
+    }
+    if split == "validation":
+        hashes["validation_pullbacks"] = sha256_file(
+            paths["pullbacks"] / "validation_pullbacks.npy"
+        )
+    else:
+        hashes["blind_points"] = sha256_file(paths["blind"] / "blind_points.npz")
+        hashes["blind_pullbacks"] = sha256_file(
+            paths["pullbacks"] / "blind_pullbacks.npy"
+        )
+    return hashes
 
 
 def load_numpy_split(
@@ -228,9 +268,7 @@ def make_tensor_split(
     )
 
 
-def build_model(
-    payload: dict[str, Any], device: torch.device
-) -> torch.nn.Module:
+def build_model(payload: dict[str, Any], device: torch.device) -> torch.nn.Module:
     reference = payload["state_dict"]["reference_h"]
     reference_h = np.asarray(reference.detach().cpu(), dtype=np.complex128)
     model = positive_tensor_network_from_artifact_payload(
@@ -267,12 +305,13 @@ def floor_fraction_statistics(
             normalized_h_values = model.reference_h @ normalized_values.unsqueeze(-1)
             normalized_reference_norm = torch.real(
                 torch.sum(
-                    torch.conj(normalized_values)
-                    * normalized_h_values.squeeze(-1),
+                    torch.conj(normalized_values) * normalized_h_values.squeeze(-1),
                     dim=1,
                 )
             )
-            floor_norm = model.positive_floor * normalized_reference_norm**model.site_count
+            floor_norm = (
+                model.positive_floor * normalized_reference_norm**model.site_count
+            )
             fractions.append((floor_norm / moments.norm).detach().cpu().numpy())
     values = np.concatenate(fractions).astype(np.float64)
     weights = dataset["weights_numpy"]
@@ -342,7 +381,9 @@ def _gradient_vector(
     fixed_log_kappa: float,
     normalization: str,
 ) -> tuple[float, torch.Tensor]:
-    parameters = tuple(parameter for parameter in model.parameters() if parameter.requires_grad)
+    parameters = tuple(
+        parameter for parameter in model.parameters() if parameter.requires_grad
+    )
     batch_weights = dataset["weights"][indices]
     batch_weights = batch_weights / torch.sum(batch_weights)
     _, metric = model.potential_and_metric(
@@ -451,7 +492,10 @@ def gradient_audit(
             "cosine": gradient_cosine(fixed_gradient, empirical_gradient),
             "relative_difference_over_fixed": float(
                 torch.linalg.vector_norm(empirical_gradient - fixed_gradient)
-                / max(float(torch.linalg.vector_norm(fixed_gradient)), np.finfo(float).tiny)
+                / max(
+                    float(torch.linalg.vector_norm(fixed_gradient)),
+                    np.finfo(float).tiny,
+                )
             ),
         },
         "euclidean_batch_gradient_noise": {},
@@ -559,9 +603,7 @@ def main() -> None:
         ),
     }
     scale_one = {
-        row["precision"]: row
-        for row in scale_results
-        if float(row["scale"]) == 1.0
+        row["precision"]: row for row in scale_results if float(row["scale"]) == 1.0
     }
     for metric_name in ("sigma_official_formula", "weighted_rms_abs_residual"):
         left = float(scale_one["complex64"]["renormalized"][metric_name])
@@ -591,8 +633,10 @@ def main() -> None:
                 "separate registered diagnostic"
             ),
             "precision_limit": (
-                "complex128 arithmetic uses coordinates persisted by the source "
-                "dataset, which are stored as float32"
+                "both paths intentionally use coordinates quantized to float32 "
+                "by this audit, matching the complex64 training input path; "
+                "complex128 therefore audits arithmetic/model precision rather "
+                "than recovering discarded coordinate bits"
             ),
         },
         "configuration": {
@@ -610,8 +654,11 @@ def main() -> None:
             "run_report_sha256": sha256_file(paths["report"]),
             "model": str(paths["model"]),
             "model_sha256": sha256_file(paths["model"]),
+            "audited_input_sha256": audited_input_hashes(paths, args.split),
             "source_run_dir": str(paths["source"]),
-            "blind_reference_run_dir": str(paths["blind"]),
+            "blind_reference_run_dir": (
+                str(paths["blind"]) if args.split == "blind" else None
+            ),
             "pullbacks_dir": str(paths["pullbacks"]),
         },
         "scale_and_precision": scale_results,

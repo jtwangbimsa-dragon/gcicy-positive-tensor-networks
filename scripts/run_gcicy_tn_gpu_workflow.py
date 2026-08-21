@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate, run, resume, inspect, and aggregate a gCICY TN GPU campaign."""
+"""Validate, run, resume, inspect, and aggregate a post-v1 TN GPU campaign."""
 
 from __future__ import annotations
 

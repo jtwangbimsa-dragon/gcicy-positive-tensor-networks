@@ -8,9 +8,63 @@ Start with [BASELINE_V1.md](BASELINE_V1.md), then read the registered
 [STUDY_PROTOCOL.md](STUDY_PROTOCOL.md).  The runnable X21 campaign is
 [x21_kd_progressive_joint_paths_v1.json](manifests/x21_kd_progressive_joint_paths_v1.json).
 
-## Scientific design
+The lower-cost Fermat-quintic extension is registered separately in
+[QUINTIC_STUDY_PROTOCOL.md](QUINTIC_STUDY_PROTOCOL.md), with runnable manifest
+[quintic_kd_progressive_joint_paths_v1.json](manifests/quintic_kd_progressive_joint_paths_v1.json).
+It starts from the frozen historical `k=20,q=25,D=6` checkpoint, treats the
+old quintic blind pool as forbidden input, and studies the new `k=40,D=14`
+target.  `D=16` is resource-preflight-only until a separate extension is
+registered.
 
-The campaign uses the frozen X21 source metric and the same immutable train,
+## Quintic campaign quick start
+
+Use a new run root; do not reuse the X21 run root or any historical output
+directory.  On the GPU host, validate hashes and CUDA first:
+
+```bash
+QUINTIC_FROZEN_ROOT="/path/to/frozen/gcicy-workspace"
+QUINTIC_RUN_ROOT="/scratch/gcicy/post-v1/quintic-kd-progressive-joint-paths-v1"
+
+python scripts/run_gcicy_tn_gpu_workflow.py validate \
+  --manifest experiments/manifests/quintic_kd_progressive_joint_paths_v1.json \
+  --frozen-root "$QUINTIC_FROZEN_ROOT" \
+  --run-root "$QUINTIC_RUN_ROOT" \
+  --check-cuda --gpu 0
+
+python scripts/run_gcicy_tn_gpu_workflow.py run \
+  --manifest experiments/manifests/quintic_kd_progressive_joint_paths_v1.json \
+  --frozen-root "$QUINTIC_FROZEN_ROOT" \
+  --run-root "$QUINTIC_RUN_ROOT" \
+  --phase resource-preflight-d14 --gpu 0
+```
+
+Only after both registered D14 memory gates pass, start or resume the main
+mechanism phase; the identical command is the recovery command after a host or
+CUDA-process interruption:
+
+```bash
+python scripts/run_gcicy_tn_gpu_workflow.py run \
+  --manifest experiments/manifests/quintic_kd_progressive_joint_paths_v1.json \
+  --frozen-root "$QUINTIC_FROZEN_ROOT" \
+  --run-root "$QUINTIC_RUN_ROOT" \
+  --phase main-mechanism --gpu 0
+
+python scripts/run_gcicy_tn_gpu_workflow.py run \
+  --manifest experiments/manifests/quintic_kd_progressive_joint_paths_v1.json \
+  --frozen-root "$QUINTIC_FROZEN_ROOT" \
+  --run-root "$QUINTIC_RUN_ROOT" \
+  --phase precision-replay --gpu 0
+```
+
+The optional `conditional-d16-preflight` phase performs no D16 accuracy fit.
+All quintic fits are development-only complex64 training; the precision phase
+creates hash-bound, zero-update complex128 twins and reevaluates the same
+10,000 validation rows.  It does not claim that the complex64 and complex128
+optimizer trajectories are equivalent.
+
+## X21 scientific design
+
+The X21 campaign uses the frozen X21 source metric and the same immutable train,
 selection, and development-confirmation pools as the v1 development studies.
 The historical blind pools are not referenced.
 
