@@ -21,3 +21,5 @@ jobs:
           python -m pip install -e .
       - name: Run deterministic core tests
         run: python RUN_CORE_TESTS.py
+      - name: Run post-v1 experiment workflow tests
+        run: python RUN_EXPERIMENT_TESTS.py

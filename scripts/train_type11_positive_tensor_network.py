@@ -6,9 +6,12 @@ from __future__ import annotations
 import argparse
 import copy
 import hashlib
+import importlib.metadata
 import json
+import os
 from pathlib import Path
 import sys
+import tempfile
 import time
 
 import numpy as np
@@ -135,6 +138,22 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="also optimize the shared dictionary stored in an initial model",
     )
+    parser.add_argument(
+        "--checkpoint",
+        type=Path,
+        help=(
+            "optional crash-recovery checkpoint, atomically replaced after each "
+            "validation evaluation"
+        ),
+    )
+    parser.add_argument(
+        "--resume-checkpoint",
+        type=Path,
+        help=(
+            "resume current model, optimizer, RNG, history, and stopping state "
+            "from a compatible checkpoint"
+        ),
+    )
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--summary", type=Path, required=True)
     return parser.parse_args()
@@ -148,11 +167,394 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def sha256_python_tree(path: Path) -> str:
+    """Hash Python implementation sources with their relative paths."""
+
+    digest = hashlib.sha256()
+    for source in sorted(path.rglob("*.py")):
+        relative = source.relative_to(path).as_posix().encode("utf-8")
+        digest.update(len(relative).to_bytes(8, "big"))
+        digest.update(relative)
+        digest.update(source.stat().st_size.to_bytes(8, "big"))
+        with source.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1 << 20), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
+
+
 def write_text_atomic(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(text, encoding="utf-8")
     temporary.replace(path)
+
+
+TRAINING_CHECKPOINT_SCHEMA = "type11-positive-tensor-network-checkpoint-v1"
+
+
+def _metadata_differences(expected, observed, *, prefix: str = "") -> list[str]:
+    """Return deterministic leaf-level differences between JSON-like values."""
+
+    if isinstance(expected, dict) and isinstance(observed, dict):
+        differences = []
+        for key in sorted(set(expected) | set(observed)):
+            path = f"{prefix}.{key}" if prefix else str(key)
+            if key not in expected:
+                differences.append(f"{path}: unexpected")
+            elif key not in observed:
+                differences.append(f"{path}: missing")
+            else:
+                differences.extend(
+                    _metadata_differences(expected[key], observed[key], prefix=path)
+                )
+        return differences
+    if expected != observed:
+        return [f"{prefix}: expected {expected!r}, got {observed!r}"]
+    return []
+
+
+def validate_training_checkpoint(
+    payload: dict,
+    *,
+    training_semantics: dict,
+    frozen_input_hashes: dict,
+) -> None:
+    """Reject incomplete checkpoints and every training-semantic mismatch."""
+
+    if not isinstance(payload, dict):
+        raise ValueError("resume checkpoint payload must be a dictionary")
+    if payload.get("schema") != TRAINING_CHECKPOINT_SCHEMA:
+        raise ValueError("unrecognized tensor-network training checkpoint")
+    required = {
+        "training_semantics",
+        "frozen_input_hashes",
+        "epoch",
+        "next_epoch",
+        "current_model_state_dict",
+        "optimizer_state_dict",
+        "permutation_generator_state",
+        "cpu_rng_state",
+        "cuda_rng_state",
+        "cuda_rng_device",
+        "history",
+        "best_state_dict",
+        "best_score",
+        "best_epoch",
+        "material_best_score",
+        "evaluations_since_material_improvement",
+        "fixed_log_kappa",
+        "fixed_log_kappa_source",
+        "runtime_seconds",
+        "device_memory",
+    }
+    missing = sorted(required.difference(payload))
+    if missing:
+        raise ValueError(f"resume checkpoint lacks fields: {missing}")
+
+    semantic_differences = _metadata_differences(
+        training_semantics,
+        payload["training_semantics"],
+    )
+    if semantic_differences:
+        raise ValueError(
+            "resume checkpoint training semantics mismatch: "
+            + "; ".join(semantic_differences)
+        )
+    hash_differences = _metadata_differences(
+        frozen_input_hashes,
+        payload["frozen_input_hashes"],
+    )
+    if hash_differences:
+        raise ValueError(
+            "resume checkpoint frozen input hash mismatch: "
+            + "; ".join(hash_differences)
+        )
+
+    epoch = payload["epoch"]
+    next_epoch = payload["next_epoch"]
+    best_epoch = payload["best_epoch"]
+    evaluations = payload["evaluations_since_material_improvement"]
+    if not isinstance(epoch, int) or isinstance(epoch, bool) or epoch < 0:
+        raise ValueError("resume checkpoint epoch must be a non-negative integer")
+    if (
+        not isinstance(next_epoch, int)
+        or isinstance(next_epoch, bool)
+        or next_epoch != epoch + 1
+    ):
+        raise ValueError("resume checkpoint next_epoch must equal epoch + 1")
+    if (
+        not isinstance(best_epoch, int)
+        or isinstance(best_epoch, bool)
+        or not 0 <= best_epoch <= epoch
+    ):
+        raise ValueError("resume checkpoint best_epoch is outside its epoch range")
+    if (
+        not isinstance(evaluations, int)
+        or isinstance(evaluations, bool)
+        or evaluations < 0
+    ):
+        raise ValueError(
+            "resume checkpoint early-stopping counter must be non-negative"
+        )
+    history = payload["history"]
+    if not isinstance(history, list) or not history:
+        raise ValueError("resume checkpoint history must be a non-empty list")
+    history_epochs = [
+        row.get("epoch") if isinstance(row, dict) else None for row in history
+    ]
+    if (
+        any(
+            not isinstance(value, int) or isinstance(value, bool)
+            for value in history_epochs
+        )
+        or history_epochs != sorted(set(history_epochs))
+        or history_epochs[-1] != epoch
+    ):
+        raise ValueError(
+            "resume checkpoint history epochs must be unique, increasing, and "
+            "end at epoch"
+        )
+    if not isinstance(payload["current_model_state_dict"], dict):
+        raise ValueError("resume checkpoint current model state must be a dictionary")
+    if not isinstance(payload["best_state_dict"], dict):
+        raise ValueError("resume checkpoint best model state must be a dictionary")
+    if not isinstance(payload["optimizer_state_dict"], dict):
+        raise ValueError("resume checkpoint optimizer state must be a dictionary")
+    if not np.isfinite(float(payload["fixed_log_kappa"])):
+        raise ValueError("resume checkpoint fixed_log_kappa must be finite")
+    if not isinstance(payload["fixed_log_kappa_source"], str):
+        raise ValueError("resume checkpoint fixed_log_kappa_source must be a string")
+    runtime_seconds = float(payload["runtime_seconds"])
+    if not np.isfinite(runtime_seconds) or runtime_seconds < 0:
+        raise ValueError(
+            "resume checkpoint runtime_seconds must be finite and non-negative"
+        )
+    device_memory = payload["device_memory"]
+    if device_memory is not None:
+        expected_memory_keys = {
+            "maximum_allocated_bytes",
+            "maximum_reserved_bytes",
+        }
+        if (
+            not isinstance(device_memory, dict)
+            or set(device_memory) != expected_memory_keys
+        ):
+            raise ValueError("resume checkpoint device_memory has invalid fields")
+        if any(
+            not isinstance(value, int) or isinstance(value, bool) or value < 0
+            for value in device_memory.values()
+        ):
+            raise ValueError("resume checkpoint device_memory must be non-negative")
+
+
+def resumed_training_termination(
+    payload: dict,
+    *,
+    requested_epochs: int,
+    early_stopping_patience: int,
+) -> str | None:
+    """Classify a validated resume boundary without repeating its evaluation."""
+
+    if (
+        early_stopping_patience > 0
+        and payload["evaluations_since_material_improvement"]
+        >= early_stopping_patience
+    ):
+        return "validation_plateau"
+    if payload["next_epoch"] > requested_epochs:
+        return "completed_requested_epochs"
+    return None
+
+
+def validate_checkpoint_paths(
+    *,
+    checkpoint_path: Path,
+    resume_checkpoint_path: Path | None,
+    output_path: Path,
+    summary_path: Path,
+    frozen_input_paths: set[Path],
+) -> None:
+    """Keep recovery writes separate from final outputs and frozen inputs."""
+
+    if output_path == summary_path:
+        raise ValueError("final model and summary paths must differ")
+    if output_path in frozen_input_paths or summary_path in frozen_input_paths:
+        raise ValueError("final outputs must differ from frozen inputs")
+    if checkpoint_path in frozen_input_paths | {output_path, summary_path}:
+        raise ValueError(
+            "checkpoint path must differ from final outputs and frozen inputs"
+        )
+    if resume_checkpoint_path in {output_path, summary_path}:
+        raise ValueError("resume checkpoint path must differ from final outputs")
+
+
+def current_device_memory(device) -> dict[str, int] | None:
+    """Return this process's CUDA peak-memory counters, or ``None`` on CPU."""
+
+    import torch
+
+    if device.type != "cuda":
+        return None
+    return {
+        "maximum_allocated_bytes": int(torch.cuda.max_memory_allocated(device)),
+        "maximum_reserved_bytes": int(torch.cuda.max_memory_reserved(device)),
+    }
+
+
+def merge_device_memory(
+    previous: dict[str, int] | None,
+    current: dict[str, int] | None,
+) -> dict[str, int] | None:
+    """Take per-counter maxima across crash-recovery processes."""
+
+    if previous is None:
+        return None if current is None else copy.deepcopy(current)
+    if current is None:
+        return copy.deepcopy(previous)
+    return {
+        key: max(int(previous[key]), int(current[key]))
+        for key in ("maximum_allocated_bytes", "maximum_reserved_bytes")
+    }
+
+
+def _clone_to_cpu(value):
+    """Recursively detach and clone tensor-bearing optimizer/model state."""
+
+    import torch
+
+    if torch.is_tensor(value):
+        return value.detach().cpu().clone()
+    if isinstance(value, dict):
+        return {key: _clone_to_cpu(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_clone_to_cpu(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_clone_to_cpu(item) for item in value)
+    return copy.deepcopy(value)
+
+
+def build_training_checkpoint(
+    *,
+    model,
+    optimizer,
+    permutation_generator,
+    epoch: int,
+    next_epoch: int,
+    history: list[dict],
+    best_state: dict,
+    best_score: float,
+    best_epoch: int,
+    material_best_score: float,
+    evaluations_since_material_improvement: int,
+    fixed_log_kappa,
+    fixed_log_kappa_source: str,
+    runtime_seconds: float,
+    device_memory: dict[str, int] | None,
+    training_semantics: dict,
+    frozen_input_hashes: dict,
+) -> dict:
+    """Snapshot all mutable training state at a completed epoch boundary."""
+
+    import torch
+
+    if next_epoch != epoch + 1:
+        raise ValueError("next_epoch must identify the epoch after the checkpoint")
+    if not np.isfinite(runtime_seconds) or runtime_seconds < 0:
+        raise ValueError("runtime_seconds must be finite and non-negative")
+    generator_device = torch.device(permutation_generator.device)
+    cuda_rng_state = None
+    cuda_rng_device = None
+    if generator_device.type == "cuda":
+        cuda_rng_state = (
+            torch.cuda.get_rng_state(generator_device).detach().cpu().clone()
+        )
+        cuda_rng_device = str(generator_device)
+    return {
+        "schema": TRAINING_CHECKPOINT_SCHEMA,
+        "training_semantics": copy.deepcopy(training_semantics),
+        "frozen_input_hashes": copy.deepcopy(frozen_input_hashes),
+        "epoch": int(epoch),
+        "next_epoch": int(next_epoch),
+        "current_model_state_dict": _clone_to_cpu(model.state_dict()),
+        "optimizer_state_dict": _clone_to_cpu(optimizer.state_dict()),
+        "permutation_generator_state": (
+            permutation_generator.get_state().detach().cpu().clone()
+        ),
+        "cpu_rng_state": torch.get_rng_state().detach().cpu().clone(),
+        "cuda_rng_state": cuda_rng_state,
+        "cuda_rng_device": cuda_rng_device,
+        "history": copy.deepcopy(history),
+        "best_state_dict": _clone_to_cpu(best_state),
+        "best_score": float(best_score),
+        "best_epoch": int(best_epoch),
+        "material_best_score": float(material_best_score),
+        "evaluations_since_material_improvement": int(
+            evaluations_since_material_improvement
+        ),
+        "fixed_log_kappa": float(fixed_log_kappa.detach().cpu()),
+        "fixed_log_kappa_source": str(fixed_log_kappa_source),
+        "runtime_seconds": float(runtime_seconds),
+        "device_memory": copy.deepcopy(device_memory),
+    }
+
+
+def save_training_checkpoint_atomic(path: Path, payload: dict) -> None:
+    """Save a PyTorch checkpoint without exposing a partially written target."""
+
+    import torch
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    os.close(descriptor)
+    temporary = Path(temporary_name)
+    try:
+        torch.save(payload, temporary)
+        with temporary.open("rb") as handle:
+            os.fsync(handle.fileno())
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def restore_training_checkpoint_state(
+    payload: dict,
+    *,
+    model,
+    optimizer,
+    permutation_generator,
+) -> None:
+    """Restore model, optimizer, and all Torch RNG streams from a checkpoint."""
+
+    import torch
+
+    model.load_state_dict(payload["current_model_state_dict"], strict=True)
+    optimizer.load_state_dict(payload["optimizer_state_dict"])
+    permutation_generator.set_state(
+        payload["permutation_generator_state"].detach().cpu()
+    )
+    torch.set_rng_state(payload["cpu_rng_state"].detach().cpu())
+    cuda_rng_state = payload["cuda_rng_state"]
+    if cuda_rng_state is not None:
+        if not torch.cuda.is_available():
+            raise ValueError(
+                "resume checkpoint contains CUDA RNG state but CUDA is unavailable"
+            )
+        generator_device = torch.device(permutation_generator.device)
+        if generator_device.type != "cuda":
+            raise ValueError(
+                "resume checkpoint CUDA RNG state requires a CUDA permutation generator"
+            )
+        if payload["cuda_rng_device"] != str(generator_device):
+            raise ValueError(
+                "resume checkpoint CUDA RNG device does not match the generator"
+            )
+        torch.cuda.set_rng_state(
+            cuda_rng_state.detach().cpu(), device=generator_device
+        )
+    elif payload["cuda_rng_device"] is not None:
+        raise ValueError("resume checkpoint has a CUDA device without CUDA RNG state")
 
 
 def validate_initial_model_compatibility(
@@ -1045,142 +1447,386 @@ def main() -> None:
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
     generator = torch.Generator(device=device)
     generator.manual_seed(args.torch_seed + 1)
-    history = []
+    history: list[dict] = []
     best_score = float("inf")
     best_epoch = 0
-    best_state = copy.deepcopy({key: value.detach().cpu() for key, value in model.state_dict().items()})
+    best_state = _clone_to_cpu(model.state_dict())
     material_best_score = float("inf")
     evaluations_since_material_improvement = 0
     termination = "completed_requested_epochs"
 
-    for epoch in range(args.epochs + 1):
-        if epoch % args.eval_every == 0 or epoch == args.epochs:
-            validation_row = evaluate_model(
-                model,
-                validation,
-                fixed_log_kappa=fixed_log_kappa,
-                tail_fraction=args.tail_fraction,
-                tail_ratio_threshold=args.tail_ratio_threshold,
-                tail_smooth_temperature=args.tail_smooth_temperature,
+    training_semantics = {
+        "adapter": adapter.key,
+        "training_mode": training_mode,
+        "model": {
+            "model_seed": args.model_seed,
+            "site_count": site_count,
+            "bond_dimension": args.bond_dimension,
+            "architecture": model.architecture,
+            "physical_dictionary_rank": model.physical_dictionary_rank,
+            "trainable_physical_dictionary": model.trainable_physical_dictionary,
+            "positive_floor": args.positive_floor,
+            "initialization_noise": args.initialization_noise,
+            "target_degree": list(target_degree),
+            "target_normalization": target_normalization,
+            "precision": args.precision,
+        },
+        "initialization": {
+            "kind": initialization["kind"],
+            "source_bond_dimension": initialization.get("source_bond_dimension"),
+            "teacher_transition": initialization.get("teacher_transition"),
+            "allow_bond_expansion": args.allow_bond_expansion,
+            "train_physical_dictionary_requested": args.train_physical_dictionary,
+        },
+        "data": {
+            "train_points": args.train_points,
+            "train_seed": args.train_seed,
+            "validation_points": args.validation_points,
+            "validation_seed": args.validation_seed,
+            "workers": args.workers,
+            "sampling_cluster_size": args.sampling_cluster_size,
+            "teacher_chunk_size": args.teacher_chunk_size,
+            "train_uses_common_pool": train["common_pool"] is not None,
+            "validation_uses_common_pool": validation["common_pool"] is not None,
+        },
+        "optimization": {
+            "optimizer": "torch.optim.Adam",
+            "epochs": args.epochs,
+            "batch_size": args.batch_size,
+            "learning_rate": args.learning_rate,
+            "gradient_clip_norm": args.gradient_clip_norm,
+            "potential_loss_weight": args.potential_loss_weight,
+            "metric_loss_weight": args.metric_loss_weight,
+            "log_energy_loss_weight": args.log_energy_loss_weight,
+            "ma_loss_weight": args.ma_loss_weight,
+            "tail_loss_weight": args.tail_loss_weight,
+            "tail_fraction": args.tail_fraction,
+            "tail_ratio_threshold": args.tail_ratio_threshold,
+            "tail_smooth_temperature": args.tail_smooth_temperature,
+            "eval_every": args.eval_every,
+            "early_stopping_patience": args.early_stopping_patience,
+            "early_stopping_min_relative_improvement": (
+                args.early_stopping_min_relative_improvement
+            ),
+            "torch_seed": args.torch_seed,
+            "kappa_source": args.kappa_source,
+            "fixed_log_kappa_source": fixed_log_kappa_source,
+        },
+        "device": str(device),
+    }
+    if args.checkpoint is not None or args.resume_checkpoint is not None:
+        device_identity = {"type": device.type, "index": device.index}
+        if device.type == "cuda":
+            logical_device = (
+                torch.cuda.current_device() if device.index is None else device.index
             )
-            score = (
-                args.log_energy_loss_weight
-                * validation_row["fixed_kappa_log_energy_rms"] ** 2
-                + args.ma_loss_weight
-                * validation_row["fixed_teacher_kappa_sqrt_ma_energy"] ** 2
-                + args.tail_loss_weight
-                * validation_row["fixed_teacher_kappa_upper_tail_cvar"]
+            device_identity.update(
+                {
+                    "logical_index": logical_device,
+                    "name": torch.cuda.get_device_name(logical_device),
+                    "capability": list(
+                        torch.cuda.get_device_capability(logical_device)
+                    ),
+                }
             )
-            if teacher is not None:
-                score += (
-                    args.potential_loss_weight
-                    * validation_row["potential_rms_to_teacher"] ** 2
-                    + args.metric_loss_weight
-                    * validation_row["affine_metric_rms_to_teacher"] ** 2
-                )
-            row = {"epoch": epoch, "validation_selection_score": score, **validation_row}
-            history.append(row)
-            anchor_text = ""
-            if teacher is not None:
-                anchor_text = (
-                    f" potential={validation_row['potential_rms_to_teacher']:.4e}"
-                    f" metric={validation_row['affine_metric_rms_to_teacher']:.4e}"
-                )
+        training_semantics["implementation"] = {
+            "trainer_sha256": sha256_file(Path(__file__).resolve()),
+            "gcicy_metric_python_sha256": sha256_python_tree(
+                ROOT / "gcicy_metric"
+            ),
+            "python_version": sys.version,
+            "numpy_version": np.__version__,
+            "scipy_version": importlib.metadata.version("scipy"),
+            "torch_version": str(torch.__version__),
+            "torch_cuda_version": torch.version.cuda,
+            "cudnn_version": torch.backends.cudnn.version(),
+            "deterministic_algorithms": (
+                torch.are_deterministic_algorithms_enabled()
+            ),
+            "cudnn_benchmark": torch.backends.cudnn.benchmark,
+            "cudnn_deterministic": torch.backends.cudnn.deterministic,
+            "float32_matmul_precision": torch.get_float32_matmul_precision(),
+            "device": device_identity,
+        }
+    frozen_input_hashes = {
+        "source_artifact_sha256": source_artifact_sha256,
+        "teacher_artifact_sha256": teacher_artifact_sha256,
+        "initial_model_sha256": initialization["model_sha256"],
+        "train_common_pool_sha256": train["common_pool_sha256"],
+        "validation_common_pool_sha256": validation["common_pool_sha256"],
+    }
+    resume_checkpoint_path = (
+        None
+        if args.resume_checkpoint is None
+        else args.resume_checkpoint.expanduser().resolve()
+    )
+    checkpoint_path = (
+        args.checkpoint.expanduser().resolve()
+        if args.checkpoint is not None
+        else resume_checkpoint_path
+    )
+    output_path = args.out.expanduser().resolve()
+    summary_path = args.summary.expanduser().resolve()
+    frozen_input_paths = {
+        source_path,
+        *(() if teacher_path is None else (teacher_path,)),
+        *(() if initial_model_path is None else (initial_model_path,)),
+    }
+    if args.train_common_pool is not None:
+        frozen_input_paths.add(args.train_common_pool.expanduser().resolve())
+    if args.validation_common_pool is not None:
+        frozen_input_paths.add(args.validation_common_pool.expanduser().resolve())
+    if checkpoint_path is not None:
+        validate_checkpoint_paths(
+            checkpoint_path=checkpoint_path,
+            resume_checkpoint_path=resume_checkpoint_path,
+            output_path=output_path,
+            summary_path=summary_path,
+            frozen_input_paths=frozen_input_paths,
+        )
+    starting_epoch = 1
+    last_checkpoint_epoch = None
+    resume_checkpoint_sha256 = None
+    accumulated_runtime_seconds = 0.0
+    accumulated_device_memory = None
+    resume_termination = None
+
+    if resume_checkpoint_path is not None:
+        resume_checkpoint_sha256 = sha256_file(resume_checkpoint_path)
+        resume_payload = torch.load(
+            resume_checkpoint_path,
+            map_location="cpu",
+            weights_only=False,
+        )
+        validate_training_checkpoint(
+            resume_payload,
+            training_semantics=training_semantics,
+            frozen_input_hashes=frozen_input_hashes,
+        )
+        if resume_payload["fixed_log_kappa_source"] != fixed_log_kappa_source:
+            raise ValueError(
+                "resume checkpoint fixed_log_kappa source does not match the request"
+            )
+        restore_training_checkpoint_state(
+            resume_payload,
+            model=model,
+            optimizer=optimizer,
+            permutation_generator=generator,
+        )
+        fixed_log_kappa = torch.tensor(
+            float(resume_payload["fixed_log_kappa"]),
+            dtype=real_dtype,
+            device=device,
+        )
+        history = copy.deepcopy(resume_payload["history"])
+        best_state = _clone_to_cpu(resume_payload["best_state_dict"])
+        best_score = float(resume_payload["best_score"])
+        best_epoch = int(resume_payload["best_epoch"])
+        material_best_score = float(resume_payload["material_best_score"])
+        accumulated_runtime_seconds = float(resume_payload["runtime_seconds"])
+        accumulated_device_memory = copy.deepcopy(resume_payload["device_memory"])
+        evaluations_since_material_improvement = int(
+            resume_payload["evaluations_since_material_improvement"]
+        )
+        starting_epoch = int(resume_payload["next_epoch"])
+        last_checkpoint_epoch = int(resume_payload["epoch"])
+        resume_termination = resumed_training_termination(
+            resume_payload,
+            requested_epochs=args.epochs,
+            early_stopping_patience=args.early_stopping_patience,
+        )
+        print(
+            f"resuming at epoch={starting_epoch} from {resume_checkpoint_path}",
+            flush=True,
+        )
+
+    def evaluate_and_record(epoch: int) -> bool:
+        nonlocal best_score
+        nonlocal best_epoch
+        nonlocal best_state
+        nonlocal material_best_score
+        nonlocal evaluations_since_material_improvement
+
+        validation_row = evaluate_model(
+            model,
+            validation,
+            fixed_log_kappa=fixed_log_kappa,
+            tail_fraction=args.tail_fraction,
+            tail_ratio_threshold=args.tail_ratio_threshold,
+            tail_smooth_temperature=args.tail_smooth_temperature,
+        )
+        score = (
+            args.log_energy_loss_weight
+            * validation_row["fixed_kappa_log_energy_rms"] ** 2
+            + args.ma_loss_weight
+            * validation_row["fixed_teacher_kappa_sqrt_ma_energy"] ** 2
+            + args.tail_loss_weight
+            * validation_row["fixed_teacher_kappa_upper_tail_cvar"]
+        )
+        if teacher is not None:
+            score += (
+                args.potential_loss_weight
+                * validation_row["potential_rms_to_teacher"] ** 2
+                + args.metric_loss_weight
+                * validation_row["affine_metric_rms_to_teacher"] ** 2
+            )
+        row = {"epoch": epoch, "validation_selection_score": score, **validation_row}
+        history.append(row)
+        anchor_text = ""
+        if teacher is not None:
+            anchor_text = (
+                f" potential={validation_row['potential_rms_to_teacher']:.4e}"
+                f" metric={validation_row['affine_metric_rms_to_teacher']:.4e}"
+            )
+        print(
+            f"epoch={epoch} score={score:.6e}{anchor_text} "
+            f"logE={validation_row['fixed_kappa_log_energy_rms']:.4e} "
+            f"chi={validation_row['compressed_ma_errors']['sqrt_squared_energy']:.4e} "
+            f"max_r={validation_row['compressed_ma_errors']['normalized_ratio_max']:.4e} "
+            f"tail={validation_row['fixed_teacher_kappa_upper_tail_cvar']:.4e}",
+            flush=True,
+        )
+        if np.isfinite(score) and score < best_score:
+            best_score = score
+            best_epoch = epoch
+            best_state = _clone_to_cpu(model.state_dict())
+        if np.isfinite(score):
+            material_threshold = material_best_score * (
+                1.0 - args.early_stopping_min_relative_improvement
+            )
+            if not np.isfinite(material_best_score) or score < material_threshold:
+                material_best_score = score
+                evaluations_since_material_improvement = 0
+            elif epoch > 0:
+                evaluations_since_material_improvement += 1
+        should_stop = (
+            args.early_stopping_patience > 0
+            and evaluations_since_material_improvement
+            >= args.early_stopping_patience
+        )
+        if should_stop:
             print(
-                f"epoch={epoch} score={score:.6e}{anchor_text} "
-                f"logE={validation_row['fixed_kappa_log_energy_rms']:.4e} "
-                f"chi={validation_row['compressed_ma_errors']['sqrt_squared_energy']:.4e} "
-                f"max_r={validation_row['compressed_ma_errors']['normalized_ratio_max']:.4e} "
-                f"tail={validation_row['fixed_teacher_kappa_upper_tail_cvar']:.4e}",
+                "early stopping: no material validation improvement for "
+                f"{evaluations_since_material_improvement} evaluations",
                 flush=True,
             )
-            if np.isfinite(score) and score < best_score:
-                best_score = score
-                best_epoch = epoch
-                best_state = copy.deepcopy(
-                    {key: value.detach().cpu() for key, value in model.state_dict().items()}
-                )
-            if np.isfinite(score):
-                material_threshold = material_best_score * (
-                    1.0 - args.early_stopping_min_relative_improvement
-                )
-                if not np.isfinite(material_best_score) or score < material_threshold:
-                    material_best_score = score
-                    evaluations_since_material_improvement = 0
-                elif epoch > 0:
-                    evaluations_since_material_improvement += 1
-            if (
-                args.early_stopping_patience > 0
-                and evaluations_since_material_improvement
-                >= args.early_stopping_patience
-            ):
-                termination = "validation_plateau"
-                print(
-                    "early stopping: no material validation improvement for "
-                    f"{evaluations_since_material_improvement} evaluations",
-                    flush=True,
-                )
-                break
-        if epoch == args.epochs:
-            break
+        return should_stop
 
-        model.train()
-        permutation = torch.randperm(train["count"], generator=generator, device=device)
-        for start in range(0, train["count"], args.batch_size):
-            indices = permutation[start : start + args.batch_size]
-            batch_weights = train["weights"][indices]
-            batch_weights = batch_weights / torch.sum(batch_weights)
-            optimizer.zero_grad(set_to_none=True)
-            potential, metric = model.potential_and_metric(
-                train["source_values"][indices],
-                train["source_derivatives"][indices],
+    def save_checkpoint(epoch: int) -> None:
+        nonlocal last_checkpoint_epoch
+
+        if checkpoint_path is None:
+            return
+        checkpoint_payload = build_training_checkpoint(
+            model=model,
+            optimizer=optimizer,
+            permutation_generator=generator,
+            epoch=epoch,
+            next_epoch=epoch + 1,
+            history=history,
+            best_state=best_state,
+            best_score=best_score,
+            best_epoch=best_epoch,
+            material_best_score=material_best_score,
+            evaluations_since_material_improvement=(
+                evaluations_since_material_improvement
+            ),
+            fixed_log_kappa=fixed_log_kappa,
+            fixed_log_kappa_source=fixed_log_kappa_source,
+            runtime_seconds=(
+                accumulated_runtime_seconds + time.perf_counter() - started
+            ),
+            device_memory=merge_device_memory(
+                accumulated_device_memory,
+                current_device_memory(device),
+            ),
+            training_semantics=training_semantics,
+            frozen_input_hashes=frozen_input_hashes,
+        )
+        save_training_checkpoint_atomic(checkpoint_path, checkpoint_payload)
+        last_checkpoint_epoch = epoch
+        print(f"checkpointed epoch={epoch} to {checkpoint_path}", flush=True)
+
+    if resume_checkpoint_path is None:
+        if evaluate_and_record(0):
+            termination = "validation_plateau"
+        save_checkpoint(0)
+    else:
+        # Seed a distinct checkpoint target immediately.  This also refreshes the
+        # source checkpoint atomically when no separate target was requested.
+        save_checkpoint(int(resume_payload["epoch"]))
+        if resume_termination == "validation_plateau":
+            termination = resume_termination
+
+    if termination == "completed_requested_epochs":
+        for epoch in range(starting_epoch, args.epochs + 1):
+            model.train()
+            permutation = torch.randperm(
+                train["count"], generator=generator, device=device
             )
-            teacher_potential = (
-                None
-                if train["teacher_potential"] is None
-                else train["teacher_potential"][indices]
-            )
-            teacher_inverse_cholesky = (
-                None
-                if train["teacher_inverse_cholesky"] is None
-                else train["teacher_inverse_cholesky"][indices]
-            )
-            (
-                potential_loss,
-                metric_loss,
-                log_energy_loss,
-                ma_loss,
-                tail_loss,
-                _,
-            ) = distillation_components(
-                potential,
-                metric,
-                teacher_potential=teacher_potential,
-                teacher_inverse_cholesky=teacher_inverse_cholesky,
-                log_omega=train["log_omega"][indices],
-                weights=batch_weights,
-                fixed_log_kappa=fixed_log_kappa,
-                tail_fraction=args.tail_fraction,
-                tail_ratio_threshold=args.tail_ratio_threshold,
-                tail_smooth_temperature=args.tail_smooth_temperature,
-            )
-            loss = (
-                args.potential_loss_weight * potential_loss
-                + args.metric_loss_weight * metric_loss
-                + args.log_energy_loss_weight * log_energy_loss
-                + args.ma_loss_weight * ma_loss
-                + args.tail_loss_weight * tail_loss
-            )
-            if not bool(torch.isfinite(loss)):
-                termination = "nonfinite_training_loss"
+            for start in range(0, train["count"], args.batch_size):
+                indices = permutation[start : start + args.batch_size]
+                batch_weights = train["weights"][indices]
+                batch_weights = batch_weights / torch.sum(batch_weights)
+                optimizer.zero_grad(set_to_none=True)
+                potential, metric = model.potential_and_metric(
+                    train["source_values"][indices],
+                    train["source_derivatives"][indices],
+                )
+                teacher_potential = (
+                    None
+                    if train["teacher_potential"] is None
+                    else train["teacher_potential"][indices]
+                )
+                teacher_inverse_cholesky = (
+                    None
+                    if train["teacher_inverse_cholesky"] is None
+                    else train["teacher_inverse_cholesky"][indices]
+                )
+                (
+                    potential_loss,
+                    metric_loss,
+                    log_energy_loss,
+                    ma_loss,
+                    tail_loss,
+                    _,
+                ) = distillation_components(
+                    potential,
+                    metric,
+                    teacher_potential=teacher_potential,
+                    teacher_inverse_cholesky=teacher_inverse_cholesky,
+                    log_omega=train["log_omega"][indices],
+                    weights=batch_weights,
+                    fixed_log_kappa=fixed_log_kappa,
+                    tail_fraction=args.tail_fraction,
+                    tail_ratio_threshold=args.tail_ratio_threshold,
+                    tail_smooth_temperature=args.tail_smooth_temperature,
+                )
+                loss = (
+                    args.potential_loss_weight * potential_loss
+                    + args.metric_loss_weight * metric_loss
+                    + args.log_energy_loss_weight * log_energy_loss
+                    + args.ma_loss_weight * ma_loss
+                    + args.tail_loss_weight * tail_loss
+                )
+                if not bool(torch.isfinite(loss)):
+                    termination = "nonfinite_training_loss"
+                    break
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(
+                    model.parameters(), args.gradient_clip_norm
+                )
+                optimizer.step()
+                if model.trainable_physical_dictionary:
+                    model.orthonormalize_physical_dictionary_()
+            if termination != "completed_requested_epochs":
                 break
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), args.gradient_clip_norm)
-            optimizer.step()
-            if model.trainable_physical_dictionary:
-                model.orthonormalize_physical_dictionary_()
-        if termination != "completed_requested_epochs":
-            break
+            if epoch % args.eval_every == 0 or epoch == args.epochs:
+                should_stop = evaluate_and_record(epoch)
+                save_checkpoint(epoch)
+                if should_stop:
+                    termination = "validation_plateau"
+                    break
 
     model.load_state_dict(best_state)
     final_validation = evaluate_model(
@@ -1191,8 +1837,6 @@ def main() -> None:
         tail_ratio_threshold=args.tail_ratio_threshold,
         tail_smooth_temperature=args.tail_smooth_temperature,
     )
-    output_path = args.out.expanduser().resolve()
-    summary_path = args.summary.expanduser().resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temporary = output_path.with_suffix(output_path.suffix + ".tmp")
     torch.save(
@@ -1235,12 +1879,10 @@ def main() -> None:
         temporary,
     )
     temporary.replace(output_path)
-    device_memory = None
-    if device.type == "cuda":
-        device_memory = {
-            "maximum_allocated_bytes": int(torch.cuda.max_memory_allocated(device)),
-            "maximum_reserved_bytes": int(torch.cuda.max_memory_reserved(device)),
-        }
+    device_memory = merge_device_memory(
+        accumulated_device_memory,
+        current_device_memory(device),
+    )
     summary = {
         "schema": "type11-positive-tensor-network-training-v1",
         "adapter": adapter.key,
@@ -1329,8 +1971,27 @@ def main() -> None:
         "best_validation": final_validation,
         "history": history,
         "termination_reason": termination,
-        "runtime_seconds": time.perf_counter() - started,
+        "runtime_seconds": (
+            accumulated_runtime_seconds + time.perf_counter() - started
+        ),
     }
+    if checkpoint_path is not None:
+        summary["checkpoint"] = {
+            "path": str(checkpoint_path),
+            "sha256": sha256_file(checkpoint_path),
+            "last_completed_validation_epoch": last_checkpoint_epoch,
+            "resume_kind": (
+                "crash_recovery"
+                if resume_checkpoint_path is not None
+                else "fresh_training"
+            ),
+            "resumed_from": (
+                None
+                if resume_checkpoint_path is None
+                else str(resume_checkpoint_path)
+            ),
+            "resumed_from_sha256": resume_checkpoint_sha256,
+        }
     write_text_atomic(summary_path, json.dumps(summary, indent=2) + "\n")
     print(f"wrote {output_path}", flush=True)
     print(f"wrote {summary_path}", flush=True)

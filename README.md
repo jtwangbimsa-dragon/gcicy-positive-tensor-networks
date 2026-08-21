@@ -57,6 +57,16 @@ python RUN_CORE_TESTS.py
 The expected result is `58 passed`. The complete frozen audit, including the
 data-backed tests and their fixtures, is distributed with the Zenodo archive.
 
+The independent post-v1 GPU control plane has a separate deterministic suite:
+
+```bash
+python RUN_EXPERIMENT_TESTS.py
+```
+
+Its baseline, registered study design, manifest, and operating instructions
+are in [`experiments/`](experiments/README.md).  These files create only new
+external run roots and do not regenerate or replace the paper artifacts.
+
 ## Repository layout
 
 | Path | Contents |
@@ -65,6 +75,7 @@ data-backed tests and their fixtures, is distributed with the Zenodo archive.
 | `scripts/` | Portable Python programs for training, evaluation, and audits |
 | `tests/` | Data-independent mathematical and model tests |
 | `docs/` | Mathematical implementation guide and production-program map |
+| `experiments/` | Independent post-v1 baselines, protocol, GPU manifest, and safety schema |
 
 The Python entry points use ordinary command-line arguments and
 package-relative imports. Machine-specific launchers, registered protocols,

@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/gcicy-tn-gpu-workflow-v1.schema.json",
+  "title": "gCICY positive-TN GPU workflow v1",
+  "type": "object",
+  "required": [
+    "schema",
+    "campaign_id",
+    "protected_paths",
+    "frozen_inputs"
+  ],
+  "properties": {
+    "schema": {
+      "const": "gcicy-tn-gpu-workflow-v1"
+    },
+    "campaign_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_.-]*$"
+    },
+    "description": {
+      "type": "string"
+    },
+    "variables": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[A-Z][A-Z0-9_]*$"
+      },
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "protected_paths": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string"
+      }
+    },
+    "frozen_inputs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["role", "path", "sha256"],
+        "properties": {
+          "role": {"type": "string", "minLength": 1},
+          "path": {"type": "string", "minLength": 1},
+          "bytes": {"type": "integer", "minimum": 0},
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "source_guard": {
+      "type": "object"
+    },
+    "environment": {
+      "type": "object"
+    },
+    "defaults": {
+      "type": "object"
+    },
+    "jobs": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/job"}
+    },
+    "job_templates": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/job"}
+    }
+  },
+  "anyOf": [
+    {"required": ["jobs"]},
+    {"required": ["job_templates"]}
+  ],
+  "$defs": {
+    "job": {
+      "type": "object",
+      "required": ["id", "command", "expected_outputs"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "phase": {"type": "string"},
+        "matrix": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": ["string", "integer", "number", "boolean"]
+            }
+          }
+        },
+        "needs": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "command": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "working_directory": {"type": "string"},
+        "environment": {"type": "object"},
+        "resources": {"type": "object"},
+        "expected_outputs": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {"type": "string"},
+              {
+                "type": "object",
+                "required": ["path"],
+                "properties": {
+                  "path": {"type": "string"},
+                  "allow_empty": {"type": "boolean"}
+                },
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "json_gates": {
+          "type": "array",
+          "items": {"type": "object"}
+        },
+        "retry": {"type": "object"},
+        "resume": {"type": "object"},
+        "scientific": {"type": "object"},
+        "result": {"type": "object"}
+      },
+      "additionalProperties": true
+    }
+  }
+}

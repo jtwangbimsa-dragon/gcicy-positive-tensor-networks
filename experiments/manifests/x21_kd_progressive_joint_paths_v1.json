@@ -1,0 +1,1042 @@
+{
+  "schema": "gcicy-tn-gpu-workflow-v1",
+  "campaign_id": "x21-kd-progressive-joint-paths-v1",
+  "description": "Post-v1 development campaign isolating k, D, initialization, parameter scope, and optimizer path on the X21 gCICY.",
+  "release_base": {
+    "software_version": "1.0.0",
+    "git_commit": "9f95071647aaf89bd520effeb322b16345d63157",
+    "zenodo_doi": "10.5281/zenodo.21963526",
+    "zenodo_archive_sha256": "587be3188b8d7a68837c3e073b062174a56244a57d7fbf3e8185a82059b608",
+    "arxiv_v1_source_sha256": "bbd16a674d93ccd6da91633312610f16cdfaf2414e4a29bcbb58b2f82fc9c50f",
+    "arxiv_v1_pdf_sha256": "3abdb11eac8cc10b41883b396cf6eeb163e23ccbb84e86b021764ce525c603b0"
+  },
+  "variables": {
+    "SOURCE": "${FROZEN_ROOT}/outputs/pipeline/type21_k1_energy_highstat_pointb64_20260718/k1_energy_highstat.npz",
+    "COMMON_K4": "${FROZEN_ROOT}/outputs/pipeline/type21_tensor_network_q22_degree_ladder_20260719/q22_k4_teacher_free.pt",
+    "TRAIN_POOL": "${FROZEN_ROOT}/outputs/pipeline/gcicy_tn_common_pools_20260728/X21_train_seed86201_n196608.npz",
+    "SELECTION_POOL": "${FROZEN_ROOT}/outputs/pipeline/gcicy_tn_common_pools_20260728/X21_selection_seed86202_n24576.npz",
+    "DEVELOPMENT_POOL": "${FROZEN_ROOT}/outputs/pipeline/gcicy_tn_common_pools_20260728/X21_confirmation_seed86203_n49152.npz",
+    "PREPARED": "${RUN_ROOT}/prepared",
+    "DIRECT": "${RUN_ROOT}/jobs/direct",
+    "PATHS": "${RUN_ROOT}/jobs/paths",
+    "JOINT": "${RUN_ROOT}/jobs/joint",
+    "OPTIMIZER": "${RUN_ROOT}/jobs/optimizer"
+  },
+  "protected_paths": [
+    "${FROZEN_ROOT}/arxiv_submission_gcicy_tn_20260817",
+    "${FROZEN_ROOT}/artifact_release",
+    "${FROZEN_ROOT}/artifact_release_tn",
+    "${FROZEN_ROOT}/gcicy paper/generated_tn",
+    "${FROZEN_ROOT}/outputs/pipeline",
+    "${FROZEN_ROOT}/outputs/release"
+  ],
+  "frozen_inputs": [
+    {
+      "role": "x21_source_h1",
+      "path": "${SOURCE}",
+      "bytes": 1472147,
+      "sha256": "a3ec6af6ba33d9500c9c2a930da4565afa6c07cb081e0656aea88aa8dce2f529"
+    },
+    {
+      "role": "x21_q22_k4_common_origin",
+      "path": "${COMMON_K4}",
+      "bytes": 70238,
+      "sha256": "c344b9cbac9032fdf0807d45265665dcd62b581cf99d7c35a5a7d13518bd72ab"
+    },
+    {
+      "role": "x21_train_pool",
+      "path": "${TRAIN_POOL}",
+      "bytes": 93433803,
+      "sha256": "050092ddc3f0847cde4b730ddd33c4e7faa6cbaffbfdafd147b171a5f191cf94"
+    },
+    {
+      "role": "x21_selection_pool",
+      "path": "${SELECTION_POOL}",
+      "bytes": 11684007,
+      "sha256": "d39779ad4bc0dc7bd4381486b198124a563d9a798bfe425a60775e87a1ef7ee9"
+    },
+    {
+      "role": "x21_development_pool",
+      "path": "${DEVELOPMENT_POOL}",
+      "bytes": 23363687,
+      "sha256": "4c4ec82e315351c9a5bebf0b3ba48b611bb8cb4ae433ce8a646e5c00426167cc"
+    }
+  ],
+  "source_guard": {
+    "release_base_commit": "9f95071647aaf89bd520effeb322b16345d63157",
+    "forbidden_branches": ["main", "master"],
+    "required_branch_prefix": "exp/",
+    "require_clean": true
+  },
+  "environment": {
+    "python": "3.12 recommended",
+    "torch": "2.7.1",
+    "cuda_required": true,
+    "precision": "complex128",
+    "reference_gpu": "RTX 4090 24 GiB",
+    "note": "This is a post-v1 environment and must not be described as the frozen v1 PyTorch 2.5.1 environment."
+  },
+  "scientific_policy": {
+    "geometry": "X21 type-(2,1) P5 x P1 seed 20260802",
+    "source_k": 1,
+    "common_origin_k": 4,
+    "parameter_scope_cores_only": "all coefficient cores jointly trained; q=121 physical dictionary, reference H, and positive floor fixed",
+    "parameter_scope_joint": "all coefficient cores and the shared q=121 physical dictionary jointly trained; reference H and positive floor fixed",
+    "selection_role": "development only; the historical confirmation pool has already informed model selection",
+    "blind_policy": "no historical blind pool is read; a new blind pool may be generated only after a separate candidate-freeze manifest"
+  },
+  "defaults": {
+    "working_directory": "${REPO_ROOT}",
+    "environment": {
+      "PYTHONUNBUFFERED": "1",
+      "OMP_NUM_THREADS": "1",
+      "MKL_NUM_THREADS": "1"
+    },
+    "retry": {
+      "max_attempts": 3,
+      "signals": [4, 5, 11],
+      "log_patterns": [],
+      "backoff_seconds": 60
+    }
+  },
+  "jobs": [
+    {
+      "id": "prepare-q121-k4",
+      "phase": "prepare",
+      "command": [
+        "${PYTHON}",
+        "scripts/complete_positive_tensor_network_dictionary.py",
+        "--model", "${COMMON_K4}",
+        "--out", "${PREPARED}/q121_k4_completed.pt",
+        "--summary", "${PREPARED}/q121_k4_completed_summary.json"
+      ],
+      "expected_outputs": [
+        "${PREPARED}/q121_k4_completed.pt",
+        "${PREPARED}/q121_k4_completed_summary.json"
+      ]
+    },
+    {
+      "id": "prepare-floor-1e14",
+      "phase": "prepare",
+      "needs": ["prepare-q121-k4"],
+      "command": [
+        "${PYTHON}",
+        "scripts/set_positive_tensor_network_floor.py",
+        "--model", "${PREPARED}/q121_k4_completed.pt",
+        "--positive-floor", "1e-14",
+        "--out", "${PREPARED}/q121_k4_floor1e14.pt",
+        "--summary", "${PREPARED}/q121_k4_floor1e14_summary.json"
+      ],
+      "expected_outputs": [
+        "${PREPARED}/q121_k4_floor1e14.pt",
+        "${PREPARED}/q121_k4_floor1e14_summary.json"
+      ],
+      "json_gates": [
+        {
+          "path": "${PREPARED}/q121_k4_floor1e14_summary.json",
+          "field": "strictly_positive",
+          "equals": true
+        }
+      ]
+    },
+    {
+      "id": "resource-preflight-k20-d12",
+      "phase": "resource-preflight",
+      "needs": [
+        "direct-equivalence-k20-d12-r1"
+      ],
+      "resources": {"gpu": true},
+      "command": [
+        "${PYTHON}",
+        "scripts/train_type11_positive_tensor_network.py",
+        "--adapter", "p5p1_type21_k3_1223",
+        "--model-seed", "20260802",
+        "--sampling-cluster-size", "6",
+        "--source-artifact", "${SOURCE}",
+        "--site-count", "20",
+        "--initial-model", "${DIRECT}/k20_d12_r1/initial/model.pt",
+        "--bond-dimension", "12",
+        "--kappa-source", "initial_model",
+        "--positive-floor", "1e-14",
+        "--initialization-noise", "0",
+        "--train-points", "196608",
+        "--train-seed", "86201",
+        "--train-common-pool", "${TRAIN_POOL}",
+        "--validation-points", "24576",
+        "--validation-seed", "86202",
+        "--validation-common-pool", "${SELECTION_POOL}",
+        "--workers", "1",
+        "--epochs", "1",
+        "--batch-size", "1024",
+        "--learning-rate", "2e-4",
+        "--gradient-clip-norm", "2",
+        "--potential-loss-weight", "0",
+        "--metric-loss-weight", "0",
+        "--log-energy-loss-weight", "1",
+        "--ma-loss-weight", "1",
+        "--tail-loss-weight", "0.1",
+        "--tail-fraction", "0.02",
+        "--tail-ratio-threshold", "1.5",
+        "--tail-smooth-temperature", "0.05",
+        "--torch-seed", "20268000",
+        "--device", "cuda",
+        "--precision", "complex128",
+        "--checkpoint", "${RUN_ROOT}/resource_preflight/k20_d12/checkpoint.pt",
+        "--out", "${RUN_ROOT}/resource_preflight/k20_d12/model.pt",
+        "--summary", "${RUN_ROOT}/resource_preflight/k20_d12/summary.json"
+      ],
+      "expected_outputs": [
+        "${RUN_ROOT}/resource_preflight/k20_d12/checkpoint.pt",
+        "${RUN_ROOT}/resource_preflight/k20_d12/model.pt",
+        "${RUN_ROOT}/resource_preflight/k20_d12/summary.json"
+      ],
+      "json_gates": [
+        {
+          "path": "${RUN_ROOT}/resource_preflight/k20_d12/summary.json",
+          "field": "termination_reason",
+          "equals": "completed_requested_epochs"
+        },
+        {
+          "path": "${RUN_ROOT}/resource_preflight/k20_d12/summary.json",
+          "field": "device_memory.maximum_allocated_bytes",
+          "gt": 0
+        }
+      ],
+      "retry": {
+        "max_attempts": 3
+      },
+      "resume": {
+        "checkpoint": "${RUN_ROOT}/resource_preflight/k20_d12/checkpoint.pt",
+        "flag": "--resume-checkpoint"
+      },
+      "scientific": {
+        "role": "one-epoch maximum-cell forward/backward/Adam GPU allocation preflight; not a metric result"
+      }
+    }
+  ],
+  "job_templates": [
+    {
+      "id": "direct-init-sites-k{{k}}-d{{D}}-r{{replicate}}",
+      "phase": "capacity-grid",
+      "matrix": {
+        "k": [8, 12, 16, 20],
+        "D": [8, 10, 12],
+        "replicate": [1, 2, 3]
+      },
+      "needs": ["prepare-floor-1e14"],
+      "command": [
+        "${PYTHON}",
+        "scripts/resize_positive_tensor_network_sites.py",
+        "--model", "${PREPARED}/q121_k4_floor1e14.pt",
+        "--target-site-count", "{{k}}",
+        "--transfer-rule", "repeat",
+        "--bridge-one-sided-activation-scale", "0.03",
+        "--bridge-noise-seed", "863000{{replicate}}",
+        "--out", "${DIRECT}/k{{k}}_d{{D}}_r{{replicate}}/initial/sites.pt",
+        "--summary", "${DIRECT}/k{{k}}_d{{D}}_r{{replicate}}/initial/sites_summary.json"
+      ],
+      "expected_outputs": [
+        "${DIRECT}/k{{k}}_d{{D}}_r{{replicate}}/initial/sites.pt",
+        "${DIRECT}/k{{k}}_d{{D}}_r{{replicate}}/initial/sites_summary.json"
+      ],
+      "scientific": {
+        "initialization": "common k4 origin repeated exactly at the learned-norm level",
+        "parameter_scope": "cores-only"
+      }
+    },
+    {
+      "id": "direct-init-bond-k{{k}}-d{{D}}-r{{replicate}}",
+      "phase": "capacity-grid",
+      "matrix": {
+        "k": [8, 12, 16, 20],
+        "D": [8, 10, 12],
+        "replicate": [1, 2, 3]
+      },
+      "needs": ["direct-init-sites-k{{k}}-d{{D}}-r{{replicate}}"],
+      "command": [
+        "${PYTHON}",
+        "scripts/expand_positive_tensor_network_bond.py",
+        "--model", "${DIRECT}/k{{k}}_d{{D}}_r{{replicate}}/initial/sites.pt",
+        "--bond-dimension", "{{D}}",
+        "--initialization-noise", "0",
+        "--one-sided-activation-scale", "0.03",
+        "--seed", "864000{{replicate}}",
+        "--precision", "preserve",
+        "--out", "${DIRECT}/k{{k}}_d{{D}}_r{{replicate}}/initial/model.pt",
+        "--summary", "${DIRECT}/k{{k}}_d{{D}}_r{{replicate}}/initial/bond_summary.json"
+      ],
+      "expected_outputs": [
+        "${DIRECT}/k{{k}}_d{{D}}_r{{replicate}}/initial/model.pt",
+        "${DIRECT}/k{{k}}_d{{D}}_r{{replicate}}/initial/bond_summary.json"
+      ],
+      "scientific": {
+        "initialization": "common k4 origin plus function-preserving one-sided D activation",
+        "parameter_scope": "cores-only"
+      }
+    },
+    {
+      "id": "direct-equivalence-k{{k}}-d{{D}}-r{{replicate}}",
+      "phase": "capacity-grid",
+      "matrix": {
+        "k": [8, 12, 16, 20],
+        "D": [8, 10, 12],
+        "replicate": [1, 2, 3]
+      },
+      "needs": ["direct-init-bond-k{{k}}-d{{D}}-r{{replicate}}"],
+      "resources": {"gpu": true},
+      "command": [
+        "${PYTHON}",
+        "scripts/audit_positive_tensor_network_equivalence.py",
+        "--adapter", "p5p1_type21_k3_1223",
+        "--model-a", "${PREPARED}/q121_k4_floor1e14.pt",
+        "--model-b", "${DIRECT}/k{{k}}_d{{D}}_r{{replicate}}/initial/model.pt",
+        "--source-artifact", "${SOURCE}",
+        "--model-seed", "20260802",
+        "--sampling-cluster-size", "6",
+        "--seed", "8650001",
+        "--points", "8190",
+        "--workers", "1",
+        "--chunk-size", "546",
+        "--absolute-tolerance", "1e-6",
+        "--relative-metric-tolerance", "1e-6",
+        "--allow-different-site-counts",
+        "--device", "cuda",
+        "--out", "${DIRECT}/k{{k}}_d{{D}}_r{{replicate}}/initial/equivalence.json"
+      ],
+      "expected_outputs": [
+        "${DIRECT}/k{{k}}_d{{D}}_r{{replicate}}/initial/equivalence.json"
+      ],
+      "json_gates": [
+        {
+          "path": "${DIRECT}/k{{k}}_d{{D}}_r{{replicate}}/initial/equivalence.json",
+          "field": "success",
+          "equals": true
+        }
+      ],
+      "scientific": {
+        "role": "epoch-zero function/metric equivalence gate"
+      }
+    },
+    {
+      "id": "direct-primary-k{{k}}-d{{D}}-r{{replicate}}",
+      "phase": "capacity-grid",
+      "matrix": {
+        "k": [8, 12, 16, 20],
+        "D": [8, 10, 12],
+        "replicate": [1, 2, 3]
+      },
+      "needs": [
+        "direct-equivalence-k{{k}}-d{{D}}-r{{replicate}}",
+        "resource-preflight-k20-d12"
+      ],
+      "resources": {"gpu": true},
+      "command": [
+        "${PYTHON}",
+        "scripts/run_gcicy_tn_plateau_stage.py",
+        "--initial-model", "${DIRECT}/k{{k}}_d{{D}}_r{{replicate}}/initial/model.pt",
+        "--stage-dir", "${DIRECT}/k{{k}}_d{{D}}_r{{replicate}}/primary",
+        "--max-rounds", "5",
+        "--first-kappa-source", "initial_model",
+        "--continuation-kappa-source", "saved_model",
+        "--",
+        "--adapter", "p5p1_type21_k3_1223",
+        "--model-seed", "20260802",
+        "--sampling-cluster-size", "6",
+        "--source-artifact", "${SOURCE}",
+        "--site-count", "{{k}}",
+        "--bond-dimension", "{{D}}",
+        "--positive-floor", "1e-14",
+        "--initialization-noise", "0",
+        "--train-points", "196608",
+        "--train-seed", "86201",
+        "--train-common-pool", "${TRAIN_POOL}",
+        "--validation-points", "24576",
+        "--validation-seed", "86202",
+        "--validation-common-pool", "${SELECTION_POOL}",
+        "--workers", "1",
+        "--epochs", "120",
+        "--batch-size", "1024",
+        "--learning-rate", "2e-4",
+        "--gradient-clip-norm", "2",
+        "--potential-loss-weight", "0",
+        "--metric-loss-weight", "0",
+        "--log-energy-loss-weight", "1",
+        "--ma-loss-weight", "1",
+        "--tail-loss-weight", "0.1",
+        "--tail-fraction", "0.02",
+        "--tail-ratio-threshold", "1.5",
+        "--tail-smooth-temperature", "0.05",
+        "--eval-every", "1",
+        "--early-stopping-patience", "8",
+        "--early-stopping-min-relative-improvement", "0.005",
+        "--torch-seed", "866000{{replicate}}",
+        "--device", "cuda",
+        "--precision", "complex128"
+      ],
+      "expected_outputs": [
+        "${DIRECT}/k{{k}}_d{{D}}_r{{replicate}}/primary/plateau_model.pt",
+        "${DIRECT}/k{{k}}_d{{D}}_r{{replicate}}/primary/plateau_summary.json",
+        "${DIRECT}/k{{k}}_d{{D}}_r{{replicate}}/primary/stage_summary.json"
+      ],
+      "json_gates": [
+        {
+          "path": "${DIRECT}/k{{k}}_d{{D}}_r{{replicate}}/primary/stage_summary.json",
+          "field": "status",
+          "equals": "validation_plateau"
+        }
+      ],
+      "scientific": {
+        "initialization": "direct-common-origin",
+        "parameter_scope": "cores-only",
+        "optimizer_path": "standard-primary"
+      }
+    },
+    {
+      "id": "direct-precision-k{{k}}-d{{D}}-r{{replicate}}",
+      "phase": "capacity-grid",
+      "matrix": {
+        "k": [8, 12, 16, 20],
+        "D": [8, 10, 12],
+        "replicate": [1, 2, 3]
+      },
+      "needs": ["direct-primary-k{{k}}-d{{D}}-r{{replicate}}"],
+      "resources": {"gpu": true},
+      "command": [
+        "${PYTHON}",
+        "scripts/run_gcicy_tn_plateau_stage.py",
+        "--initial-model", "${DIRECT}/k{{k}}_d{{D}}_r{{replicate}}/primary/plateau_model.pt",
+        "--stage-dir", "${DIRECT}/k{{k}}_d{{D}}_r{{replicate}}/precision",
+        "--max-rounds", "5",
+        "--first-kappa-source", "saved_model",
+        "--continuation-kappa-source", "saved_model",
+        "--",
+        "--adapter", "p5p1_type21_k3_1223",
+        "--model-seed", "20260802",
+        "--sampling-cluster-size", "6",
+        "--source-artifact", "${SOURCE}",
+        "--site-count", "{{k}}",
+        "--bond-dimension", "{{D}}",
+        "--positive-floor", "1e-14",
+        "--initialization-noise", "0",
+        "--train-points", "196608",
+        "--train-seed", "86201",
+        "--train-common-pool", "${TRAIN_POOL}",
+        "--validation-points", "24576",
+        "--validation-seed", "86202",
+        "--validation-common-pool", "${SELECTION_POOL}",
+        "--workers", "1",
+        "--epochs", "120",
+        "--batch-size", "1024",
+        "--learning-rate", "3e-5",
+        "--gradient-clip-norm", "2",
+        "--potential-loss-weight", "0",
+        "--metric-loss-weight", "0",
+        "--log-energy-loss-weight", "1",
+        "--ma-loss-weight", "1",
+        "--tail-loss-weight", "0.1",
+        "--tail-fraction", "0.02",
+        "--tail-ratio-threshold", "1.5",
+        "--tail-smooth-temperature", "0.05",
+        "--eval-every", "1",
+        "--early-stopping-patience", "8",
+        "--early-stopping-min-relative-improvement", "0.003",
+        "--torch-seed", "866000{{replicate}}",
+        "--device", "cuda",
+        "--precision", "complex128"
+      ],
+      "expected_outputs": [
+        "${DIRECT}/k{{k}}_d{{D}}_r{{replicate}}/precision/plateau_model.pt",
+        "${DIRECT}/k{{k}}_d{{D}}_r{{replicate}}/precision/plateau_summary.json",
+        "${DIRECT}/k{{k}}_d{{D}}_r{{replicate}}/precision/stage_summary.json"
+      ],
+      "json_gates": [
+        {
+          "path": "${DIRECT}/k{{k}}_d{{D}}_r{{replicate}}/precision/stage_summary.json",
+          "field": "status",
+          "equals": "validation_plateau"
+        }
+      ],
+      "scientific": {
+        "initialization": "direct-common-origin",
+        "parameter_scope": "cores-only",
+        "optimizer_path": "standard-primary-precision"
+      }
+    },
+    {
+      "id": "direct-audit-k{{k}}-d{{D}}-r{{replicate}}",
+      "phase": "capacity-grid",
+      "matrix": {
+        "k": [8, 12, 16, 20],
+        "D": [8, 10, 12],
+        "replicate": [1, 2, 3]
+      },
+      "needs": ["direct-precision-k{{k}}-d{{D}}-r{{replicate}}"],
+      "resources": {"gpu": true},
+      "command": [
+        "${PYTHON}",
+        "scripts/audit_type11_positive_tensor_network.py",
+        "--model", "${DIRECT}/k{{k}}_d{{D}}_r{{replicate}}/precision/plateau_model.pt",
+        "--adapter", "p5p1_type21_k3_1223",
+        "--source-artifact", "${SOURCE}",
+        "--model-seed", "20260802",
+        "--seed", "86203",
+        "--points", "49152",
+        "--common-pool", "${DEVELOPMENT_POOL}",
+        "--common-pool-split", "confirmation",
+        "--sampling-cluster-size", "6",
+        "--workers", "1",
+        "--device", "cuda",
+        "--arrays-out", "${DIRECT}/k{{k}}_d{{D}}_r{{replicate}}/audit/arrays.npz",
+        "--out", "${DIRECT}/k{{k}}_d{{D}}_r{{replicate}}/audit/report.json"
+      ],
+      "expected_outputs": [
+        "${DIRECT}/k{{k}}_d{{D}}_r{{replicate}}/audit/arrays.npz",
+        "${DIRECT}/k{{k}}_d{{D}}_r{{replicate}}/audit/report.json"
+      ],
+      "json_gates": [
+        {
+          "path": "${DIRECT}/k{{k}}_d{{D}}_r{{replicate}}/audit/report.json",
+          "field": "metrics.minimum_metric_eigenvalue",
+          "gt": 0
+        }
+      ]
+    },
+    {
+      "id": "direct-tail-k{{k}}-d{{D}}-r{{replicate}}",
+      "phase": "capacity-grid",
+      "matrix": {
+        "k": [8, 12, 16, 20],
+        "D": [8, 10, 12],
+        "replicate": [1, 2, 3]
+      },
+      "needs": ["direct-audit-k{{k}}-d{{D}}-r{{replicate}}"],
+      "command": [
+        "${PYTHON}",
+        "scripts/evaluate_gcicy_metric_tail_arrays.py",
+        "--arrays", "${DIRECT}/k{{k}}_d{{D}}_r{{replicate}}/audit/arrays.npz",
+        "--label", "direct-k{{k}}-d{{D}}-r{{replicate}}",
+        "--out", "${DIRECT}/k{{k}}_d{{D}}_r{{replicate}}/audit/tails.json"
+      ],
+      "expected_outputs": [
+        "${DIRECT}/k{{k}}_d{{D}}_r{{replicate}}/audit/tails.json"
+      ],
+      "scientific": {
+        "factors": {
+          "initialization": "direct-common-origin",
+          "parameter_scope": "cores-only",
+          "optimizer_path": "standard-primary-precision",
+          "comparison_family": "capacity-surface",
+          "evaluation_split": "development-confirmation"
+        }
+      },
+      "result": {
+        "path": "${DIRECT}/k{{k}}_d{{D}}_r{{replicate}}/audit/tails.json",
+        "fields": {
+          "sigma": "models.direct-k{{k}}-d{{D}}-r{{replicate}}.metrics.sigma",
+          "chi": "models.direct-k{{k}}-d{{D}}-r{{replicate}}.metrics.chi",
+          "absolute_log_ratio_q999": "models.direct-k{{k}}-d{{D}}-r{{replicate}}.metrics.absolute_log_ratio_q999",
+          "absolute_log_ratio_cvar_1pct": "models.direct-k{{k}}-d{{D}}-r{{replicate}}.metrics.absolute_log_ratio_cvar_1pct",
+          "minimum_metric_eigenvalue": "models.direct-k{{k}}-d{{D}}-r{{replicate}}.metrics.minimum_metric_eigenvalue",
+          "nonpositive_metric_count": "models.direct-k{{k}}-d{{D}}-r{{replicate}}.metrics.nonpositive_metric_count"
+        }
+      }
+    },
+    {
+      "id": "path-d-jump-k16-d12-r{{replicate}}",
+      "phase": "progressive-paths",
+      "matrix": {"replicate": [1, 2, 3]},
+      "needs": [
+        "direct-precision-k16-d8-r{{replicate}}",
+        "resource-preflight-k20-d12"
+      ],
+      "resources": {"gpu": true},
+      "command": [
+        "${PYTHON}", "scripts/run_gcicy_tn_study_arm.py",
+        "--initial-model", "${DIRECT}/k16_d8_r{{replicate}}/precision/plateau_model.pt",
+        "--arm-dir", "${PATHS}/d_jump_k16_d12_r{{replicate}}",
+        "--target-k", "16", "--target-d", "12",
+        "--stage", "primary,2e-4,0.005,8,120,5",
+        "--stage", "precision,3e-5,0.003,8,120,5",
+        "--adapter", "p5p1_type21_k3_1223",
+        "--model-seed", "20260802",
+        "--source-artifact", "${SOURCE}",
+        "--sampling-cluster-size", "6", "--workers", "1",
+        "--teacher-chunk-size", "512",
+        "--train-common-pool", "${TRAIN_POOL}",
+        "--selection-common-pool", "${SELECTION_POOL}",
+        "--development-common-pool", "${DEVELOPMENT_POOL}",
+        "--development-pool-split", "confirmation",
+        "--train-points", "196608", "--selection-points", "24576",
+        "--development-points", "49152", "--equivalence-points", "8190",
+        "--train-seed", "86201", "--selection-seed", "86202",
+        "--development-seed", "86203", "--equivalence-seed", "8650001",
+        "--torch-seed", "866000{{replicate}}",
+        "--transfer-seed", "864000{{replicate}}",
+        "--batch-size", "1024", "--gradient-clip-norm", "2",
+        "--positive-floor", "1e-14", "--initialization-noise", "0",
+        "--potential-loss-weight", "0", "--metric-loss-weight", "0",
+        "--log-energy-loss-weight", "1", "--ma-loss-weight", "1",
+        "--tail-loss-weight", "0.1", "--tail-fraction", "0.02",
+        "--tail-ratio-threshold", "1.5", "--tail-smooth-temperature", "0.05",
+        "--eval-every", "1", "--first-kappa-source", "saved_model",
+        "--continuation-kappa-source", "saved_model",
+        "--site-activation-scale", "0.03", "--bond-activation-scale", "0.03",
+        "--equivalence-chunk-size", "546",
+        "--equivalence-absolute-tolerance", "1e-6",
+        "--equivalence-relative-metric-tolerance", "1e-6",
+        "--precision", "complex128", "--device", "cuda"
+      ],
+      "expected_outputs": [
+        "${PATHS}/d_jump_k16_d12_r{{replicate}}/final_model.pt",
+        "${PATHS}/d_jump_k16_d12_r{{replicate}}/arm_summary.json",
+        "${PATHS}/d_jump_k16_d12_r{{replicate}}/final_summary.json"
+      ],
+      "json_gates": [
+        {"path": "${PATHS}/d_jump_k16_d12_r{{replicate}}/final_summary.json", "field": "status", "equals": "complete"},
+        {"path": "${PATHS}/d_jump_k16_d12_r{{replicate}}/final_summary.json", "field": "tail_metrics.minimum_metric_eigenvalue", "gt": 0},
+        {"path": "${PATHS}/d_jump_k16_d12_r{{replicate}}/final_summary.json", "field": "tail_metrics.nonpositive_metric_count", "equals": 0}
+      ],
+      "scientific": {"factors": {"k": 16, "D": 12, "initialization": "trained-D8-to-D12", "parameter_scope": "cores-only", "optimizer_path": "standard-primary-precision", "comparison_family": "progressive-D"}},
+      "result": {
+        "path": "${PATHS}/d_jump_k16_d12_r{{replicate}}/final_summary.json",
+        "fields": {
+          "sigma": "tail_metrics.sigma", "chi": "tail_metrics.chi",
+          "absolute_log_ratio_q999": "tail_metrics.absolute_log_ratio_q999",
+          "absolute_log_ratio_cvar_1pct": "tail_metrics.absolute_log_ratio_cvar_1pct",
+          "minimum_metric_eigenvalue": "tail_metrics.minimum_metric_eigenvalue",
+          "nonpositive_metric_count": "tail_metrics.nonpositive_metric_count"
+        }
+      }
+    },
+    {
+      "id": "path-k-jump-k16-d12-r{{replicate}}",
+      "phase": "progressive-paths",
+      "matrix": {"replicate": [1, 2, 3]},
+      "needs": ["direct-precision-k8-d12-r{{replicate}}", "resource-preflight-k20-d12"],
+      "resources": {"gpu": true},
+      "command": [
+        "${PYTHON}", "scripts/run_gcicy_tn_study_arm.py",
+        "--initial-model", "${DIRECT}/k8_d12_r{{replicate}}/precision/plateau_model.pt",
+        "--arm-dir", "${PATHS}/k_jump_k16_d12_r{{replicate}}",
+        "--target-k", "16", "--target-d", "12",
+        "--stage", "primary,2e-4,0.005,8,120,5",
+        "--stage", "precision,3e-5,0.003,8,120,5",
+        "--adapter", "p5p1_type21_k3_1223", "--model-seed", "20260802",
+        "--source-artifact", "${SOURCE}", "--sampling-cluster-size", "6",
+        "--workers", "1", "--teacher-chunk-size", "512",
+        "--train-common-pool", "${TRAIN_POOL}",
+        "--selection-common-pool", "${SELECTION_POOL}",
+        "--development-common-pool", "${DEVELOPMENT_POOL}",
+        "--development-pool-split", "confirmation",
+        "--train-points", "196608", "--selection-points", "24576",
+        "--development-points", "49152", "--equivalence-points", "8190",
+        "--train-seed", "86201", "--selection-seed", "86202",
+        "--development-seed", "86203", "--equivalence-seed", "8650001",
+        "--torch-seed", "866000{{replicate}}", "--transfer-seed", "863000{{replicate}}",
+        "--batch-size", "1024", "--gradient-clip-norm", "2",
+        "--positive-floor", "1e-14", "--initialization-noise", "0",
+        "--potential-loss-weight", "0", "--metric-loss-weight", "0",
+        "--log-energy-loss-weight", "1", "--ma-loss-weight", "1",
+        "--tail-loss-weight", "0.1", "--tail-fraction", "0.02",
+        "--tail-ratio-threshold", "1.5", "--tail-smooth-temperature", "0.05",
+        "--eval-every", "1", "--first-kappa-source", "initial_model",
+        "--continuation-kappa-source", "saved_model",
+        "--site-activation-scale", "0.03", "--bond-activation-scale", "0.03",
+        "--equivalence-chunk-size", "546",
+        "--equivalence-absolute-tolerance", "1e-6",
+        "--equivalence-relative-metric-tolerance", "1e-6",
+        "--precision", "complex128", "--device", "cuda"
+      ],
+      "expected_outputs": [
+        "${PATHS}/k_jump_k16_d12_r{{replicate}}/final_model.pt",
+        "${PATHS}/k_jump_k16_d12_r{{replicate}}/arm_summary.json",
+        "${PATHS}/k_jump_k16_d12_r{{replicate}}/final_summary.json"
+      ],
+      "json_gates": [
+        {"path": "${PATHS}/k_jump_k16_d12_r{{replicate}}/final_summary.json", "field": "status", "equals": "complete"},
+        {"path": "${PATHS}/k_jump_k16_d12_r{{replicate}}/final_summary.json", "field": "tail_metrics.minimum_metric_eigenvalue", "gt": 0},
+        {"path": "${PATHS}/k_jump_k16_d12_r{{replicate}}/final_summary.json", "field": "tail_metrics.nonpositive_metric_count", "equals": 0}
+      ],
+      "scientific": {"factors": {"k": 16, "D": 12, "initialization": "trained-k8-to-k16", "parameter_scope": "cores-only", "optimizer_path": "standard-primary-precision", "comparison_family": "progressive-k"}},
+      "result": {
+        "path": "${PATHS}/k_jump_k16_d12_r{{replicate}}/final_summary.json",
+        "fields": {
+          "sigma": "tail_metrics.sigma", "chi": "tail_metrics.chi",
+          "absolute_log_ratio_q999": "tail_metrics.absolute_log_ratio_q999",
+          "absolute_log_ratio_cvar_1pct": "tail_metrics.absolute_log_ratio_cvar_1pct",
+          "minimum_metric_eigenvalue": "tail_metrics.minimum_metric_eigenvalue",
+          "nonpositive_metric_count": "tail_metrics.nonpositive_metric_count"
+        }
+      }
+    },
+    {
+      "id": "path-endpoint-control-k16-d12-r{{replicate}}",
+      "phase": "progressive-paths",
+      "matrix": {"replicate": [1, 2, 3]},
+      "needs": ["direct-precision-k16-d12-r{{replicate}}", "resource-preflight-k20-d12"],
+      "resources": {"gpu": true},
+      "command": [
+        "${PYTHON}", "scripts/run_gcicy_tn_study_arm.py",
+        "--initial-model", "${DIRECT}/k16_d12_r{{replicate}}/precision/plateau_model.pt",
+        "--arm-dir", "${PATHS}/endpoint_control_k16_d12_r{{replicate}}",
+        "--target-k", "16", "--target-d", "12",
+        "--stage", "primary,2e-4,0.005,8,120,5",
+        "--stage", "precision,3e-5,0.003,8,120,5",
+        "--adapter", "p5p1_type21_k3_1223", "--model-seed", "20260802",
+        "--source-artifact", "${SOURCE}", "--sampling-cluster-size", "6",
+        "--workers", "1", "--teacher-chunk-size", "512",
+        "--train-common-pool", "${TRAIN_POOL}",
+        "--selection-common-pool", "${SELECTION_POOL}",
+        "--development-common-pool", "${DEVELOPMENT_POOL}",
+        "--development-pool-split", "confirmation",
+        "--train-points", "196608", "--selection-points", "24576",
+        "--development-points", "49152", "--equivalence-points", "8190",
+        "--train-seed", "86201", "--selection-seed", "86202",
+        "--development-seed", "86203", "--equivalence-seed", "8650001",
+        "--torch-seed", "866000{{replicate}}", "--transfer-seed", "864000{{replicate}}",
+        "--batch-size", "1024", "--gradient-clip-norm", "2",
+        "--positive-floor", "1e-14", "--initialization-noise", "0",
+        "--potential-loss-weight", "0", "--metric-loss-weight", "0",
+        "--log-energy-loss-weight", "1", "--ma-loss-weight", "1",
+        "--tail-loss-weight", "0.1", "--tail-fraction", "0.02",
+        "--tail-ratio-threshold", "1.5", "--tail-smooth-temperature", "0.05",
+        "--eval-every", "1", "--first-kappa-source", "saved_model",
+        "--continuation-kappa-source", "saved_model",
+        "--site-activation-scale", "0.03", "--bond-activation-scale", "0.03",
+        "--equivalence-chunk-size", "546",
+        "--equivalence-absolute-tolerance", "1e-6",
+        "--equivalence-relative-metric-tolerance", "1e-6",
+        "--precision", "complex128", "--device", "cuda"
+      ],
+      "expected_outputs": [
+        "${PATHS}/endpoint_control_k16_d12_r{{replicate}}/final_model.pt",
+        "${PATHS}/endpoint_control_k16_d12_r{{replicate}}/arm_summary.json",
+        "${PATHS}/endpoint_control_k16_d12_r{{replicate}}/final_summary.json"
+      ],
+      "json_gates": [
+        {"path": "${PATHS}/endpoint_control_k16_d12_r{{replicate}}/final_summary.json", "field": "status", "equals": "complete"},
+        {"path": "${PATHS}/endpoint_control_k16_d12_r{{replicate}}/final_summary.json", "field": "tail_metrics.minimum_metric_eigenvalue", "gt": 0},
+        {"path": "${PATHS}/endpoint_control_k16_d12_r{{replicate}}/final_summary.json", "field": "tail_metrics.nonpositive_metric_count", "equals": 0}
+      ],
+      "scientific": {"factors": {"k": 16, "D": 12, "initialization": "trained-endpoint-continuation", "parameter_scope": "cores-only", "optimizer_path": "standard-primary-precision-twice", "comparison_family": "progressive-path-control"}},
+      "result": {
+        "path": "${PATHS}/endpoint_control_k16_d12_r{{replicate}}/final_summary.json",
+        "fields": {
+          "sigma": "tail_metrics.sigma", "chi": "tail_metrics.chi",
+          "absolute_log_ratio_q999": "tail_metrics.absolute_log_ratio_q999",
+          "absolute_log_ratio_cvar_1pct": "tail_metrics.absolute_log_ratio_cvar_1pct",
+          "minimum_metric_eigenvalue": "tail_metrics.minimum_metric_eigenvalue",
+          "nonpositive_metric_count": "tail_metrics.nonpositive_metric_count"
+        }
+      }
+    },
+    {
+      "id": "joint-epochzero-k16-d12-r{{replicate}}",
+      "phase": "parameter-scope",
+      "matrix": {"replicate": [1, 2, 3]},
+      "needs": ["direct-equivalence-k16-d12-r{{replicate}}", "resource-preflight-k20-d12"],
+      "resources": {"gpu": true},
+      "command": [
+        "${PYTHON}", "scripts/run_gcicy_tn_study_arm.py",
+        "--initial-model", "${DIRECT}/k16_d12_r{{replicate}}/initial/model.pt",
+        "--arm-dir", "${JOINT}/epochzero_k16_d12_r{{replicate}}",
+        "--target-k", "16", "--target-d", "12",
+        "--stage", "primary,2e-4,0.005,8,120,5",
+        "--stage", "precision,3e-5,0.003,8,120,5",
+        "--train-physical-dictionary",
+        "--adapter", "p5p1_type21_k3_1223", "--model-seed", "20260802",
+        "--source-artifact", "${SOURCE}", "--sampling-cluster-size", "6",
+        "--workers", "1", "--teacher-chunk-size", "512",
+        "--train-common-pool", "${TRAIN_POOL}",
+        "--selection-common-pool", "${SELECTION_POOL}",
+        "--development-common-pool", "${DEVELOPMENT_POOL}",
+        "--development-pool-split", "confirmation",
+        "--train-points", "196608", "--selection-points", "24576",
+        "--development-points", "49152", "--equivalence-points", "8190",
+        "--train-seed", "86201", "--selection-seed", "86202",
+        "--development-seed", "86203", "--equivalence-seed", "8650001",
+        "--torch-seed", "866000{{replicate}}", "--transfer-seed", "864000{{replicate}}",
+        "--batch-size", "1024", "--gradient-clip-norm", "2",
+        "--positive-floor", "1e-14", "--initialization-noise", "0",
+        "--potential-loss-weight", "0", "--metric-loss-weight", "0",
+        "--log-energy-loss-weight", "1", "--ma-loss-weight", "1",
+        "--tail-loss-weight", "0.1", "--tail-fraction", "0.02",
+        "--tail-ratio-threshold", "1.5", "--tail-smooth-temperature", "0.05",
+        "--eval-every", "1", "--first-kappa-source", "initial_model",
+        "--continuation-kappa-source", "saved_model",
+        "--site-activation-scale", "0.03", "--bond-activation-scale", "0.03",
+        "--equivalence-chunk-size", "546",
+        "--equivalence-absolute-tolerance", "1e-6",
+        "--equivalence-relative-metric-tolerance", "1e-6",
+        "--precision", "complex128", "--device", "cuda"
+      ],
+      "expected_outputs": [
+        "${JOINT}/epochzero_k16_d12_r{{replicate}}/final_model.pt",
+        "${JOINT}/epochzero_k16_d12_r{{replicate}}/arm_summary.json",
+        "${JOINT}/epochzero_k16_d12_r{{replicate}}/final_summary.json"
+      ],
+      "json_gates": [
+        {"path": "${JOINT}/epochzero_k16_d12_r{{replicate}}/final_summary.json", "field": "status", "equals": "complete"},
+        {"path": "${JOINT}/epochzero_k16_d12_r{{replicate}}/final_summary.json", "field": "train_physical_dictionary", "equals": true},
+        {"path": "${JOINT}/epochzero_k16_d12_r{{replicate}}/final_summary.json", "field": "tail_metrics.minimum_metric_eigenvalue", "gt": 0},
+        {"path": "${JOINT}/epochzero_k16_d12_r{{replicate}}/final_summary.json", "field": "tail_metrics.nonpositive_metric_count", "equals": 0}
+      ],
+      "scientific": {"factors": {"k": 16, "D": 12, "initialization": "direct-common-origin", "parameter_scope": "cores-plus-dictionary", "optimizer_path": "standard-primary-precision", "comparison_family": "parameter-scope"}},
+      "result": {
+        "path": "${JOINT}/epochzero_k16_d12_r{{replicate}}/final_summary.json",
+        "fields": {
+          "sigma": "tail_metrics.sigma", "chi": "tail_metrics.chi",
+          "absolute_log_ratio_q999": "tail_metrics.absolute_log_ratio_q999",
+          "absolute_log_ratio_cvar_1pct": "tail_metrics.absolute_log_ratio_cvar_1pct",
+          "minimum_metric_eigenvalue": "tail_metrics.minimum_metric_eigenvalue",
+          "nonpositive_metric_count": "tail_metrics.nonpositive_metric_count"
+        }
+      }
+    },
+    {
+      "id": "joint-cores-control-k16-d12-r{{replicate}}",
+      "phase": "parameter-scope",
+      "matrix": {"replicate": [1, 2, 3]},
+      "needs": ["direct-precision-k16-d12-r{{replicate}}", "resource-preflight-k20-d12"],
+      "resources": {"gpu": true},
+      "command": [
+        "${PYTHON}", "scripts/run_gcicy_tn_study_arm.py",
+        "--initial-model", "${DIRECT}/k16_d12_r{{replicate}}/precision/plateau_model.pt",
+        "--arm-dir", "${JOINT}/cores_control_k16_d12_r{{replicate}}",
+        "--target-k", "16", "--target-d", "12",
+        "--stage", "low-lr-continuation,1.5e-5,0.0015,10,120,5",
+        "--adapter", "p5p1_type21_k3_1223", "--model-seed", "20260802",
+        "--source-artifact", "${SOURCE}", "--sampling-cluster-size", "6",
+        "--workers", "1", "--teacher-chunk-size", "512",
+        "--train-common-pool", "${TRAIN_POOL}",
+        "--selection-common-pool", "${SELECTION_POOL}",
+        "--development-common-pool", "${DEVELOPMENT_POOL}",
+        "--development-pool-split", "confirmation",
+        "--train-points", "196608", "--selection-points", "24576",
+        "--development-points", "49152", "--equivalence-points", "8190",
+        "--train-seed", "86201", "--selection-seed", "86202",
+        "--development-seed", "86203", "--equivalence-seed", "8650001",
+        "--torch-seed", "866000{{replicate}}", "--transfer-seed", "864000{{replicate}}",
+        "--batch-size", "1024", "--gradient-clip-norm", "2",
+        "--positive-floor", "1e-14", "--initialization-noise", "0",
+        "--potential-loss-weight", "0", "--metric-loss-weight", "0",
+        "--log-energy-loss-weight", "1", "--ma-loss-weight", "1",
+        "--tail-loss-weight", "0.1", "--tail-fraction", "0.02",
+        "--tail-ratio-threshold", "1.5", "--tail-smooth-temperature", "0.05",
+        "--eval-every", "1", "--first-kappa-source", "saved_model",
+        "--continuation-kappa-source", "saved_model",
+        "--site-activation-scale", "0.03", "--bond-activation-scale", "0.03",
+        "--equivalence-chunk-size", "546",
+        "--equivalence-absolute-tolerance", "1e-6",
+        "--equivalence-relative-metric-tolerance", "1e-6",
+        "--precision", "complex128", "--device", "cuda"
+      ],
+      "expected_outputs": [
+        "${JOINT}/cores_control_k16_d12_r{{replicate}}/final_model.pt",
+        "${JOINT}/cores_control_k16_d12_r{{replicate}}/arm_summary.json",
+        "${JOINT}/cores_control_k16_d12_r{{replicate}}/final_summary.json"
+      ],
+      "json_gates": [
+        {"path": "${JOINT}/cores_control_k16_d12_r{{replicate}}/final_summary.json", "field": "status", "equals": "complete"},
+        {"path": "${JOINT}/cores_control_k16_d12_r{{replicate}}/final_summary.json", "field": "train_physical_dictionary", "equals": false},
+        {"path": "${JOINT}/cores_control_k16_d12_r{{replicate}}/final_summary.json", "field": "tail_metrics.minimum_metric_eigenvalue", "gt": 0},
+        {"path": "${JOINT}/cores_control_k16_d12_r{{replicate}}/final_summary.json", "field": "tail_metrics.nonpositive_metric_count", "equals": 0}
+      ],
+      "scientific": {"factors": {"k": 16, "D": 12, "initialization": "trained-cores-endpoint", "parameter_scope": "cores-only", "optimizer_path": "low-lr-continuation", "comparison_family": "staged-parameter-scope"}},
+      "result": {
+        "path": "${JOINT}/cores_control_k16_d12_r{{replicate}}/final_summary.json",
+        "fields": {
+          "sigma": "tail_metrics.sigma", "chi": "tail_metrics.chi",
+          "absolute_log_ratio_q999": "tail_metrics.absolute_log_ratio_q999",
+          "absolute_log_ratio_cvar_1pct": "tail_metrics.absolute_log_ratio_cvar_1pct",
+          "minimum_metric_eigenvalue": "tail_metrics.minimum_metric_eigenvalue",
+          "nonpositive_metric_count": "tail_metrics.nonpositive_metric_count"
+        }
+      }
+    },
+    {
+      "id": "joint-after-cores-k16-d12-r{{replicate}}",
+      "phase": "parameter-scope",
+      "matrix": {"replicate": [1, 2, 3]},
+      "needs": ["direct-precision-k16-d12-r{{replicate}}", "resource-preflight-k20-d12"],
+      "resources": {"gpu": true},
+      "command": [
+        "${PYTHON}", "scripts/run_gcicy_tn_study_arm.py",
+        "--initial-model", "${DIRECT}/k16_d12_r{{replicate}}/precision/plateau_model.pt",
+        "--arm-dir", "${JOINT}/after_cores_k16_d12_r{{replicate}}",
+        "--target-k", "16", "--target-d", "12",
+        "--stage", "low-lr-dictionary-unfreeze,1.5e-5,0.0015,10,120,5",
+        "--train-physical-dictionary",
+        "--adapter", "p5p1_type21_k3_1223", "--model-seed", "20260802",
+        "--source-artifact", "${SOURCE}", "--sampling-cluster-size", "6",
+        "--workers", "1", "--teacher-chunk-size", "512",
+        "--train-common-pool", "${TRAIN_POOL}",
+        "--selection-common-pool", "${SELECTION_POOL}",
+        "--development-common-pool", "${DEVELOPMENT_POOL}",
+        "--development-pool-split", "confirmation",
+        "--train-points", "196608", "--selection-points", "24576",
+        "--development-points", "49152", "--equivalence-points", "8190",
+        "--train-seed", "86201", "--selection-seed", "86202",
+        "--development-seed", "86203", "--equivalence-seed", "8650001",
+        "--torch-seed", "866000{{replicate}}", "--transfer-seed", "864000{{replicate}}",
+        "--batch-size", "1024", "--gradient-clip-norm", "2",
+        "--positive-floor", "1e-14", "--initialization-noise", "0",
+        "--potential-loss-weight", "0", "--metric-loss-weight", "0",
+        "--log-energy-loss-weight", "1", "--ma-loss-weight", "1",
+        "--tail-loss-weight", "0.1", "--tail-fraction", "0.02",
+        "--tail-ratio-threshold", "1.5", "--tail-smooth-temperature", "0.05",
+        "--eval-every", "1", "--first-kappa-source", "saved_model",
+        "--continuation-kappa-source", "saved_model",
+        "--site-activation-scale", "0.03", "--bond-activation-scale", "0.03",
+        "--equivalence-chunk-size", "546",
+        "--equivalence-absolute-tolerance", "1e-6",
+        "--equivalence-relative-metric-tolerance", "1e-6",
+        "--precision", "complex128", "--device", "cuda"
+      ],
+      "expected_outputs": [
+        "${JOINT}/after_cores_k16_d12_r{{replicate}}/final_model.pt",
+        "${JOINT}/after_cores_k16_d12_r{{replicate}}/arm_summary.json",
+        "${JOINT}/after_cores_k16_d12_r{{replicate}}/final_summary.json"
+      ],
+      "json_gates": [
+        {"path": "${JOINT}/after_cores_k16_d12_r{{replicate}}/final_summary.json", "field": "status", "equals": "complete"},
+        {"path": "${JOINT}/after_cores_k16_d12_r{{replicate}}/final_summary.json", "field": "train_physical_dictionary", "equals": true},
+        {"path": "${JOINT}/after_cores_k16_d12_r{{replicate}}/final_summary.json", "field": "tail_metrics.minimum_metric_eigenvalue", "gt": 0},
+        {"path": "${JOINT}/after_cores_k16_d12_r{{replicate}}/final_summary.json", "field": "tail_metrics.nonpositive_metric_count", "equals": 0}
+      ],
+      "scientific": {"factors": {"k": 16, "D": 12, "initialization": "trained-cores-endpoint", "parameter_scope": "cores-plus-dictionary", "optimizer_path": "low-lr-dictionary-unfreeze", "comparison_family": "staged-parameter-scope"}},
+      "result": {
+        "path": "${JOINT}/after_cores_k16_d12_r{{replicate}}/final_summary.json",
+        "fields": {
+          "sigma": "tail_metrics.sigma", "chi": "tail_metrics.chi",
+          "absolute_log_ratio_q999": "tail_metrics.absolute_log_ratio_q999",
+          "absolute_log_ratio_cvar_1pct": "tail_metrics.absolute_log_ratio_cvar_1pct",
+          "minimum_metric_eigenvalue": "tail_metrics.minimum_metric_eigenvalue",
+          "nonpositive_metric_count": "tail_metrics.nonpositive_metric_count"
+        }
+      }
+    },
+    {
+      "id": "optimizer-gentle-k16-d12-r{{replicate}}",
+      "phase": "optimizer-paths",
+      "matrix": {"replicate": [1, 2, 3]},
+      "needs": ["direct-equivalence-k16-d12-r{{replicate}}", "resource-preflight-k20-d12"],
+      "resources": {"gpu": true},
+      "command": [
+        "${PYTHON}", "scripts/run_gcicy_tn_study_arm.py",
+        "--initial-model", "${DIRECT}/k16_d12_r{{replicate}}/initial/model.pt",
+        "--arm-dir", "${OPTIMIZER}/gentle_k16_d12_r{{replicate}}",
+        "--target-k", "16", "--target-d", "12",
+        "--stage", "gentle-primary,7.5e-5,0.005,8,120,5",
+        "--stage", "gentle-precision,1.5e-5,0.003,8,120,5",
+        "--adapter", "p5p1_type21_k3_1223", "--model-seed", "20260802",
+        "--source-artifact", "${SOURCE}", "--sampling-cluster-size", "6",
+        "--workers", "1", "--teacher-chunk-size", "512",
+        "--train-common-pool", "${TRAIN_POOL}",
+        "--selection-common-pool", "${SELECTION_POOL}",
+        "--development-common-pool", "${DEVELOPMENT_POOL}",
+        "--development-pool-split", "confirmation",
+        "--train-points", "196608", "--selection-points", "24576",
+        "--development-points", "49152", "--equivalence-points", "8190",
+        "--train-seed", "86201", "--selection-seed", "86202",
+        "--development-seed", "86203", "--equivalence-seed", "8650001",
+        "--torch-seed", "866000{{replicate}}", "--transfer-seed", "864000{{replicate}}",
+        "--batch-size", "1024", "--gradient-clip-norm", "2",
+        "--positive-floor", "1e-14", "--initialization-noise", "0",
+        "--potential-loss-weight", "0", "--metric-loss-weight", "0",
+        "--log-energy-loss-weight", "1", "--ma-loss-weight", "1",
+        "--tail-loss-weight", "0.1", "--tail-fraction", "0.02",
+        "--tail-ratio-threshold", "1.5", "--tail-smooth-temperature", "0.05",
+        "--eval-every", "1", "--first-kappa-source", "initial_model",
+        "--continuation-kappa-source", "saved_model",
+        "--site-activation-scale", "0.03", "--bond-activation-scale", "0.03",
+        "--equivalence-chunk-size", "546",
+        "--equivalence-absolute-tolerance", "1e-6",
+        "--equivalence-relative-metric-tolerance", "1e-6",
+        "--precision", "complex128", "--device", "cuda"
+      ],
+      "expected_outputs": [
+        "${OPTIMIZER}/gentle_k16_d12_r{{replicate}}/final_model.pt",
+        "${OPTIMIZER}/gentle_k16_d12_r{{replicate}}/arm_summary.json",
+        "${OPTIMIZER}/gentle_k16_d12_r{{replicate}}/final_summary.json"
+      ],
+      "json_gates": [
+        {"path": "${OPTIMIZER}/gentle_k16_d12_r{{replicate}}/final_summary.json", "field": "status", "equals": "complete"},
+        {"path": "${OPTIMIZER}/gentle_k16_d12_r{{replicate}}/final_summary.json", "field": "tail_metrics.minimum_metric_eigenvalue", "gt": 0},
+        {"path": "${OPTIMIZER}/gentle_k16_d12_r{{replicate}}/final_summary.json", "field": "tail_metrics.nonpositive_metric_count", "equals": 0}
+      ],
+      "scientific": {"factors": {"k": 16, "D": 12, "initialization": "direct-common-origin", "parameter_scope": "cores-only", "optimizer_path": "gentle-primary-precision", "comparison_family": "optimizer-path"}},
+      "result": {
+        "path": "${OPTIMIZER}/gentle_k16_d12_r{{replicate}}/final_summary.json",
+        "fields": {
+          "sigma": "tail_metrics.sigma", "chi": "tail_metrics.chi",
+          "absolute_log_ratio_q999": "tail_metrics.absolute_log_ratio_q999",
+          "absolute_log_ratio_cvar_1pct": "tail_metrics.absolute_log_ratio_cvar_1pct",
+          "minimum_metric_eigenvalue": "tail_metrics.minimum_metric_eigenvalue",
+          "nonpositive_metric_count": "tail_metrics.nonpositive_metric_count"
+        }
+      }
+    },
+    {
+      "id": "path-endpoint-rekappa-control-k16-d12-r{{replicate}}",
+      "phase": "progressive-paths",
+      "matrix": {"replicate": [1, 2, 3]},
+      "needs": ["direct-precision-k16-d12-r{{replicate}}", "resource-preflight-k20-d12"],
+      "resources": {"gpu": true},
+      "command": [
+        "${PYTHON}", "scripts/run_gcicy_tn_study_arm.py",
+        "--initial-model", "${DIRECT}/k16_d12_r{{replicate}}/precision/plateau_model.pt",
+        "--arm-dir", "${PATHS}/endpoint_rekappa_control_k16_d12_r{{replicate}}",
+        "--target-k", "16", "--target-d", "12",
+        "--stage", "primary,2e-4,0.005,8,120,5",
+        "--stage", "precision,3e-5,0.003,8,120,5",
+        "--adapter", "p5p1_type21_k3_1223", "--model-seed", "20260802",
+        "--source-artifact", "${SOURCE}", "--sampling-cluster-size", "6",
+        "--workers", "1", "--teacher-chunk-size", "512",
+        "--train-common-pool", "${TRAIN_POOL}",
+        "--selection-common-pool", "${SELECTION_POOL}",
+        "--development-common-pool", "${DEVELOPMENT_POOL}",
+        "--development-pool-split", "confirmation",
+        "--train-points", "196608", "--selection-points", "24576",
+        "--development-points", "49152", "--equivalence-points", "8190",
+        "--train-seed", "86201", "--selection-seed", "86202",
+        "--development-seed", "86203", "--equivalence-seed", "8650001",
+        "--torch-seed", "866000{{replicate}}", "--transfer-seed", "864000{{replicate}}",
+        "--batch-size", "1024", "--gradient-clip-norm", "2",
+        "--positive-floor", "1e-14", "--initialization-noise", "0",
+        "--potential-loss-weight", "0", "--metric-loss-weight", "0",
+        "--log-energy-loss-weight", "1", "--ma-loss-weight", "1",
+        "--tail-loss-weight", "0.1", "--tail-fraction", "0.02",
+        "--tail-ratio-threshold", "1.5", "--tail-smooth-temperature", "0.05",
+        "--eval-every", "1", "--first-kappa-source", "initial_model",
+        "--continuation-kappa-source", "saved_model",
+        "--site-activation-scale", "0.03", "--bond-activation-scale", "0.03",
+        "--equivalence-chunk-size", "546",
+        "--equivalence-absolute-tolerance", "1e-6",
+        "--equivalence-relative-metric-tolerance", "1e-6",
+        "--precision", "complex128", "--device", "cuda"
+      ],
+      "expected_outputs": [
+        "${PATHS}/endpoint_rekappa_control_k16_d12_r{{replicate}}/final_model.pt",
+        "${PATHS}/endpoint_rekappa_control_k16_d12_r{{replicate}}/arm_summary.json",
+        "${PATHS}/endpoint_rekappa_control_k16_d12_r{{replicate}}/final_summary.json"
+      ],
+      "json_gates": [
+        {"path": "${PATHS}/endpoint_rekappa_control_k16_d12_r{{replicate}}/final_summary.json", "field": "status", "equals": "complete"},
+        {"path": "${PATHS}/endpoint_rekappa_control_k16_d12_r{{replicate}}/final_summary.json", "field": "tail_metrics.minimum_metric_eigenvalue", "gt": 0},
+        {"path": "${PATHS}/endpoint_rekappa_control_k16_d12_r{{replicate}}/final_summary.json", "field": "tail_metrics.nonpositive_metric_count", "equals": 0}
+      ],
+      "scientific": {"factors": {"k": 16, "D": 12, "initialization": "trained-endpoint-reestimated-kappa", "parameter_scope": "cores-only", "optimizer_path": "standard-primary-precision-twice", "comparison_family": "progressive-k-control"}},
+      "result": {
+        "path": "${PATHS}/endpoint_rekappa_control_k16_d12_r{{replicate}}/final_summary.json",
+        "fields": {
+          "sigma": "tail_metrics.sigma", "chi": "tail_metrics.chi",
+          "absolute_log_ratio_q999": "tail_metrics.absolute_log_ratio_q999",
+          "absolute_log_ratio_cvar_1pct": "tail_metrics.absolute_log_ratio_cvar_1pct",
+          "minimum_metric_eigenvalue": "tail_metrics.minimum_metric_eigenvalue",
+          "nonpositive_metric_count": "tail_metrics.nonpositive_metric_count"
+        }
+      }
+    }
+  ]
+}
