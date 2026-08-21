@@ -6,11 +6,13 @@ from pathlib import Path
 import sys
 
 import pytest
+import torch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from scripts import run_quintic_tn_study_arm as arm
+from scripts import audit_quintic_positive_tensor_network_equivalence as equivalence
 
 
 def _option(command: list[str], name: str) -> str:
@@ -33,7 +35,12 @@ def _normalized() -> dict:
     }
 
 
-def _metadata(path: Path) -> arm.ModelMetadata:
+def _metadata(
+    path: Path,
+    *,
+    expected_source_degree: int | None = None,
+) -> arm.ModelMetadata:
+    assert expected_source_degree == 1
     text = str(path)
     if "01_sites_40" in text:
         sites, bond, precision, inherited = 40, 6, "complex128", None
@@ -59,6 +66,152 @@ def _metadata(path: Path) -> arm.ModelMetadata:
     )
 
 
+def _real_shape_payload(*, include_source_degree: bool) -> dict:
+    payload = {
+        "schema": arm.MODEL_SCHEMA,
+        "architecture": "shared_local_dictionary",
+        "site_count": 20,
+        "bond_dimension": 6,
+        "physical_dictionary_rank": 25,
+        "precision": "complex64",
+        "positive_floor": 1e-4,
+        "target_normalization": 1.0 / (20 * 3.141592653589793),
+        "trainable_physical_dictionary": True,
+        "transfer_implementation": "vectorized",
+        "state_dict": {
+            "reference_h": torch.eye(5, dtype=torch.complex64),
+            "physical_dictionary": torch.zeros((25, 5, 5), dtype=torch.complex64),
+            "coefficient_cores.0": torch.zeros((1, 6, 25), dtype=torch.complex64),
+            **{
+                f"coefficient_cores.{index}": torch.zeros(
+                    (6, 6, 25), dtype=torch.complex64
+                )
+                for index in range(1, 19)
+            },
+            "coefficient_cores.19": torch.zeros((6, 1, 25), dtype=torch.complex64),
+        },
+    }
+    if include_source_degree:
+        payload["source_degree"] = 1
+        payload["output_dimension"] = 5
+    return payload
+
+
+def test_legacy_anchor_metadata_requires_and_validates_explicit_source_degree(
+    tmp_path: Path,
+) -> None:
+    model = tmp_path / "legacy_anchor.pt"
+    torch.save(_real_shape_payload(include_source_degree=False), model)
+
+    metadata = arm.load_model_metadata(model, expected_source_degree=1)
+    assert metadata.source_degree == 1
+    assert metadata.site_count == 20
+    assert metadata.bond_dimension == 6
+    assert metadata.dictionary_rank == 25
+    assert metadata.output_dimension == 5
+
+    with pytest.raises(arm.ArmError, match="explicit --source-degree is required"):
+        arm.load_model_metadata(model)
+    with pytest.raises(arm.ArmError, match="source dimension disagrees"):
+        arm.load_model_metadata(model, expected_source_degree=2)
+
+
+def test_current_metadata_is_not_overridden_by_explicit_source_degree(
+    tmp_path: Path,
+) -> None:
+    model = tmp_path / "current.pt"
+    torch.save(_real_shape_payload(include_source_degree=True), model)
+
+    metadata = arm.load_model_metadata(model, expected_source_degree=1)
+    assert metadata.output_dimension == 5
+    with pytest.raises(arm.ArmError, match="saved source_degree does not match"):
+        arm.load_model_metadata(model, expected_source_degree=2)
+
+
+def test_legacy_adapter_is_create_only_hash_bound_and_audit_ready(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "legacy.pt"
+    torch.save(_real_shape_payload(include_source_degree=False), source)
+    source_sha = arm.sha256_file(source)
+    source_payload = torch.load(source, map_location="cpu", weights_only=False)
+
+    adapted, summary = arm.prepare_legacy_initial_model(
+        source,
+        tmp_path / "arm",
+        expected_source_degree=1,
+    )
+    assert summary is not None
+    assert arm.sha256_file(source) == source_sha
+    assert summary == json.loads(
+        (tmp_path / "arm" / "legacy_initial_adapter" / "summary.json").read_text()
+    )
+    assert summary["source_model_sha256"] == source_sha
+    assert summary["adapted_model_sha256"] == arm.sha256_file(adapted)
+    assert summary["optimizer_updates"] == 0
+    assert summary["state_dict_exact_copy"] is True
+    assert summary["added_metadata"] == {
+        "source_degree": 1,
+        "output_dimension": 5,
+    }
+    assert not any("/" in str(value) for value in summary.values())
+
+    adapted_payload = torch.load(adapted, map_location="cpu", weights_only=False)
+    assert adapted_payload["source_degree"] == 1
+    assert adapted_payload["output_dimension"] == 5
+    assert "total_degree" not in adapted_payload
+    assert "source_model" not in adapted_payload["legacy_metadata_adapter"]
+    assert adapted_payload["legacy_metadata_adapter"]["optimizer_updates"] == 0
+    assert adapted_payload["state_dict"].keys() == source_payload["state_dict"].keys()
+    for name, source_tensor in source_payload["state_dict"].items():
+        assert torch.equal(adapted_payload["state_dict"][name], source_tensor)
+
+    resized_payload = dict(adapted_payload)
+    resized_payload["site_count"] = 40
+    equivalence.validate_model_pair(
+        adapted_payload,
+        resized_payload,
+        allow_different_site_counts=True,
+        allow_different_precisions=False,
+    )
+
+    reused, reused_summary = arm.prepare_legacy_initial_model(
+        source,
+        tmp_path / "arm",
+        expected_source_degree=1,
+    )
+    assert reused == adapted
+    assert arm.sha256_file(reused) == summary["adapted_model_sha256"]
+    assert reused_summary == summary
+
+
+def test_legacy_adapter_hash_is_location_independent_and_rejects_conflicts(
+    tmp_path: Path,
+) -> None:
+    source_a = tmp_path / "host-a" / "legacy.pt"
+    source_b = tmp_path / "host-b" / "legacy-copy.pt"
+    source_a.parent.mkdir()
+    source_b.parent.mkdir()
+    torch.save(_real_shape_payload(include_source_degree=False), source_a)
+    source_b.write_bytes(source_a.read_bytes())
+
+    model_a, summary_a = arm.prepare_legacy_initial_model(
+        source_a, tmp_path / "run-a", expected_source_degree=1
+    )
+    model_b, summary_b = arm.prepare_legacy_initial_model(
+        source_b, tmp_path / "run-b", expected_source_degree=1
+    )
+    assert arm.sha256_file(model_a) == arm.sha256_file(model_b)
+    assert summary_a == summary_b
+
+    summary_path = tmp_path / "run-a" / "legacy_initial_adapter" / "summary.json"
+    summary_path.write_text("{}\n", encoding="utf-8")
+    with pytest.raises(arm.ArmError, match="summary conflict"):
+        arm.prepare_legacy_initial_model(
+            source_a, tmp_path / "run-a", expected_source_degree=1
+        )
+
+
 def _cli(tmp_path: Path) -> tuple[list[str], dict[str, Path]]:
     paths = {
         "initial": tmp_path / "initial.pt",
@@ -66,7 +219,7 @@ def _cli(tmp_path: Path) -> tuple[list[str], dict[str, Path]]:
         "source": tmp_path / "source",
         "pullbacks": tmp_path / "pullbacks",
     }
-    paths["initial"].write_bytes(b"initial")
+    torch.save(_real_shape_payload(include_source_degree=True), paths["initial"])
     for relative in ("training_data/dataset.npz", "training_data/basis.pickle"):
         path = paths["source"] / relative
         path.parent.mkdir(parents=True, exist_ok=True)

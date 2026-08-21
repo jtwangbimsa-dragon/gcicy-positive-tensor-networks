@@ -28,6 +28,10 @@ RESULT_SCHEMA = "quintic-tn-study-arm-result-v1"
 SUMMARY_SCHEMA = "quintic-tn-study-arm-summary-v1"
 MODEL_SCHEMA = "quintic-positive-tensor-network-v1"
 REPORT_SCHEMA = "quintic-positive-tensor-network-same-points-v1"
+LEGACY_ADAPTER_SCHEMA = "quintic-positive-tensor-network-legacy-adapter-v1"
+LEGACY_ADAPTER_SUMMARY_SCHEMA = (
+    "quintic-positive-tensor-network-legacy-adapter-summary-v1"
+)
 SCOPE_ORDER = {"new_channels": 0, "cores": 1, "joint": 2}
 
 
@@ -101,6 +105,28 @@ def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2, sort_keys=True)
             handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def write_torch_atomic(path: Path, payload: dict[str, Any]) -> None:
+    """Publish one Torch artifact without exposing a partial target."""
+
+    import torch
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    temporary = Path(name)
+    try:
+        # Saving through the file handle fixes Torch's archive root name to
+        # "archive" instead of embedding the random temporary filename.
+        with os.fdopen(descriptor, "wb") as handle:
+            torch.save(payload, handle)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, path)
@@ -340,7 +366,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return args
 
 
-def load_model_metadata(path: Path) -> ModelMetadata:
+def load_model_metadata(
+    path: Path,
+    *,
+    expected_source_degree: int | None = None,
+) -> ModelMetadata:
     import torch
 
     payload = torch.load(path, map_location="cpu", weights_only=False)
@@ -351,13 +381,52 @@ def load_model_metadata(path: Path) -> ModelMetadata:
     state = payload.get("state_dict")
     if not isinstance(state, dict) or "physical_dictionary" not in state:
         raise ArmError("model has no saved shared physical dictionary")
-    dictionary_rank = int(
-        payload.get("physical_dictionary_rank", state["physical_dictionary"].shape[0])
-    )
-    source_degree = int(payload["source_degree"])
-    source_section_count = 5 if source_degree == 1 else 15
     dictionary_shape = tuple(state["physical_dictionary"].shape)
-    inferred_output = int(dictionary_shape[1] // source_section_count)
+    if len(dictionary_shape) != 3 or any(
+        dimension <= 0 for dimension in dictionary_shape
+    ):
+        raise ArmError(
+            "saved physical dictionary must have shape "
+            "(rank, output_dimension, source_sections)"
+        )
+    if "source_degree" in payload:
+        source_degree = int(payload["source_degree"])
+        if (
+            expected_source_degree is not None
+            and source_degree != expected_source_degree
+        ):
+            raise ArmError(
+                "saved source_degree does not match explicit --source-degree"
+            )
+    else:
+        if expected_source_degree is None:
+            raise ArmError(
+                "legacy model lacks source_degree; explicit --source-degree is required"
+            )
+        source_degree = int(expected_source_degree)
+    if source_degree not in {1, 2}:
+        raise ArmError("quintic source_degree must be 1 or 2")
+    source_section_count = math.comb(source_degree + 4, 4)
+    if dictionary_shape[2] != source_section_count:
+        raise ArmError(
+            "saved physical dictionary source dimension disagrees with "
+            "explicit source_degree"
+        )
+    reference = state.get("reference_h")
+    if reference is None or tuple(reference.shape) != (
+        source_section_count,
+        source_section_count,
+    ):
+        raise ArmError("saved reference_h shape disagrees with explicit source_degree")
+    dictionary_rank = int(payload.get("physical_dictionary_rank", dictionary_shape[0]))
+    if dictionary_rank != dictionary_shape[0]:
+        raise ArmError("saved physical_dictionary_rank disagrees with tensor shape")
+    inferred_output = int(dictionary_shape[1])
+    output_dimension = int(payload.get("output_dimension", inferred_output))
+    if output_dimension != inferred_output or output_dimension < source_section_count:
+        raise ArmError(
+            "saved output_dimension disagrees with physical dictionary shape"
+        )
     expansion = payload.get("bond_expansion")
     inherited = None
     if isinstance(expansion, dict):
@@ -369,7 +438,7 @@ def load_model_metadata(path: Path) -> ModelMetadata:
         site_count=int(payload["site_count"]),
         bond_dimension=int(payload["bond_dimension"]),
         dictionary_rank=dictionary_rank,
-        output_dimension=int(payload.get("output_dimension", inferred_output)),
+        output_dimension=output_dimension,
         precision=str(payload["precision"]),
         positive_floor=float(payload["positive_floor"]),
         transfer_implementation=str(
@@ -382,6 +451,172 @@ def load_model_metadata(path: Path) -> ModelMetadata:
         fermat_two_site_blocking=bool(payload.get("fermat_two_site_blocking", False)),
         inherited_bond_dimension=inherited,
     )
+
+
+def _artifact_values_equal(left: Any, right: Any) -> bool:
+    """Compare tensor-bearing artifact values without dtype or shape coercion."""
+
+    import torch
+
+    if torch.is_tensor(left) or torch.is_tensor(right):
+        return bool(
+            torch.is_tensor(left)
+            and torch.is_tensor(right)
+            and left.dtype == right.dtype
+            and tuple(left.shape) == tuple(right.shape)
+            and torch.equal(left, right)
+        )
+    if isinstance(left, dict) or isinstance(right, dict):
+        return bool(
+            isinstance(left, dict)
+            and isinstance(right, dict)
+            and left.keys() == right.keys()
+            and all(_artifact_values_equal(left[key], right[key]) for key in left)
+        )
+    if isinstance(left, (list, tuple)) or isinstance(right, (list, tuple)):
+        return bool(
+            type(left) is type(right)
+            and len(left) == len(right)
+            and all(
+                _artifact_values_equal(left_item, right_item)
+                for left_item, right_item in zip(left, right, strict=True)
+            )
+        )
+    try:
+        return bool(left == right)
+    except (TypeError, ValueError):
+        return False
+
+
+def _validate_legacy_adapter_payload(
+    source_payload: dict[str, Any],
+    adapted_payload: dict[str, Any],
+    *,
+    source_sha256: str,
+    added_metadata: dict[str, int],
+) -> None:
+    provenance = {
+        "schema": LEGACY_ADAPTER_SCHEMA,
+        "source_model_sha256": source_sha256,
+        "added_metadata": added_metadata,
+        "optimizer_updates": 0,
+        "state_dict_exact_copy": True,
+    }
+    if adapted_payload.get("legacy_metadata_adapter") != provenance:
+        raise ArmError("legacy metadata adapter provenance conflict")
+    for name, value in added_metadata.items():
+        if adapted_payload.get(name) != value:
+            raise ArmError(f"legacy metadata adapter did not add {name} exactly")
+    stripped = dict(adapted_payload)
+    stripped.pop("legacy_metadata_adapter", None)
+    for name in added_metadata:
+        stripped.pop(name, None)
+    if not _artifact_values_equal(source_payload, stripped):
+        raise ArmError("legacy metadata adapter changed source artifact content")
+    if not _artifact_values_equal(
+        source_payload.get("state_dict"), adapted_payload.get("state_dict")
+    ):
+        raise ArmError("legacy metadata adapter changed state tensors")
+
+
+def prepare_legacy_initial_model(
+    source_path: Path,
+    arm_dir: Path,
+    *,
+    expected_source_degree: int,
+) -> tuple[Path, dict[str, Any] | None]:
+    """Create or reuse a hash-bound, metadata-only adapter for legacy anchors."""
+
+    import torch
+
+    source_path = source_path.expanduser().resolve()
+    source_sha = sha256_file(source_path)
+    source_payload = torch.load(source_path, map_location="cpu", weights_only=False)
+    if sha256_file(source_path) != source_sha:
+        raise ArmError("legacy adapter source changed while it was loaded")
+    metadata = load_model_metadata(
+        source_path,
+        expected_source_degree=expected_source_degree,
+    )
+    added_metadata: dict[str, int] = {}
+    if "source_degree" not in source_payload:
+        added_metadata["source_degree"] = metadata.source_degree
+    if "output_dimension" not in source_payload:
+        added_metadata["output_dimension"] = metadata.output_dimension
+    if not added_metadata:
+        return source_path, None
+    if "legacy_metadata_adapter" in source_payload:
+        raise ArmError("legacy source already contains conflicting adapter provenance")
+
+    adapter_dir = arm_dir / "legacy_initial_adapter"
+    model_path = adapter_dir / "model.pt"
+    summary_path = adapter_dir / "summary.json"
+    provenance = {
+        "schema": LEGACY_ADAPTER_SCHEMA,
+        "source_model_sha256": source_sha,
+        "added_metadata": added_metadata,
+        "optimizer_updates": 0,
+        "state_dict_exact_copy": True,
+    }
+    adapted_payload = dict(source_payload)
+    adapted_payload.update(added_metadata)
+    adapted_payload["legacy_metadata_adapter"] = provenance
+
+    if summary_path.exists() and not model_path.is_file():
+        raise ArmError("legacy metadata adapter summary exists without its model")
+    if model_path.exists():
+        if not model_path.is_file():
+            raise ArmError("legacy metadata adapter model path is not a file")
+        try:
+            existing_payload = torch.load(
+                model_path, map_location="cpu", weights_only=False
+            )
+        except Exception as error:
+            raise ArmError("legacy metadata adapter model conflict") from error
+        _validate_legacy_adapter_payload(
+            source_payload,
+            existing_payload,
+            source_sha256=source_sha,
+            added_metadata=added_metadata,
+        )
+    else:
+        write_torch_atomic(model_path, adapted_payload)
+        existing_payload = torch.load(
+            model_path, map_location="cpu", weights_only=False
+        )
+        _validate_legacy_adapter_payload(
+            source_payload,
+            existing_payload,
+            source_sha256=source_sha,
+            added_metadata=added_metadata,
+        )
+
+    summary = {
+        "schema": LEGACY_ADAPTER_SUMMARY_SCHEMA,
+        "source_model_sha256": source_sha,
+        "adapted_model_sha256": sha256_file(model_path),
+        "added_metadata": added_metadata,
+        "optimizer_updates": 0,
+        "state_dict_exact_copy": True,
+        "position_independent_provenance": True,
+    }
+    if summary_path.exists():
+        try:
+            observed_summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise ArmError("legacy metadata adapter summary is invalid") from error
+        if observed_summary != summary:
+            raise ArmError("legacy metadata adapter summary conflict")
+    else:
+        # The sidecar is the adapter publication commit marker and is always last.
+        write_json_atomic(summary_path, summary)
+    if sha256_file(source_path) != source_sha:
+        raise ArmError("legacy metadata adapter modified its source model")
+    load_model_metadata(
+        model_path,
+        expected_source_degree=expected_source_degree,
+    )
+    return model_path, summary
 
 
 def _is_within(path: Path, directory: Path) -> bool:
@@ -728,19 +963,28 @@ def run_arm(
     *,
     python_executable: str = sys.executable,
 ) -> int:
-    initial_model = args.initial_model.expanduser().resolve()
+    registered_initial_model = args.initial_model.expanduser().resolve()
     source_dir = args.source_run_dir.expanduser().resolve()
     pullbacks_dir = args.pullbacks_dir.expanduser().resolve()
     arm_dir = args.arm_dir.expanduser().resolve()
-    if not initial_model.is_file():
-        raise ArmError(f"initial model does not exist: {initial_model}")
+    if not registered_initial_model.is_file():
+        raise ArmError(f"initial model does not exist: {registered_initial_model}")
     if _is_within(arm_dir, source_dir) or _is_within(arm_dir, pullbacks_dir):
         raise ArmError("--arm-dir must be independent of frozen source/pullback trees")
     for script in (RESIZE, EXPAND, AUDIT, PLATEAU, TRAINER):
         if not script.is_file():
             raise ArmError(f"required script does not exist: {script}")
     arm_dir.mkdir(parents=True, exist_ok=True)
-    metadata = load_model_metadata(initial_model)
+    registered_initial_sha = sha256_file(registered_initial_model)
+    initial_model, legacy_adapter = prepare_legacy_initial_model(
+        registered_initial_model,
+        arm_dir,
+        expected_source_degree=args.source_degree,
+    )
+    metadata = load_model_metadata(
+        initial_model,
+        expected_source_degree=args.source_degree,
+    )
     if metadata.source_degree != args.source_degree:
         raise ArmError("--source-degree does not match the registered initial model")
     if not math.isclose(
@@ -765,7 +1009,9 @@ def run_arm(
     }
     configuration = {
         "schema": SUMMARY_SCHEMA,
-        "initial_model_sha256": initial_sha,
+        "initial_model_sha256": registered_initial_sha,
+        "effective_initial_model_sha256": initial_sha,
+        "legacy_metadata_adapter": legacy_adapter,
         "initial_metadata": asdict(metadata),
         "source_run_dir": str(source_dir),
         "pullbacks_dir": str(pullbacks_dir),
@@ -884,7 +1130,10 @@ def run_arm(
         if sha256_file(current_model) != current_sha:
             raise ArmError("transfer modified its source model")
         output_sha = sha256_file(output_model)
-        metadata = load_model_metadata(output_model)
+        metadata = load_model_metadata(
+            output_model,
+            expected_source_degree=args.source_degree,
+        )
         allow_sites = before.site_count != metadata.site_count
         allow_precision = before.precision != metadata.precision
         if not _valid_audit(audit_path, current_sha, output_sha):
@@ -1017,7 +1266,10 @@ def run_arm(
         current_model = model_path
         current_sha = sha256_file(model_path)
         current_report = report_path
-        metadata = load_model_metadata(model_path)
+        metadata = load_model_metadata(
+            model_path,
+            expected_source_degree=args.source_degree,
+        )
         stage_records.append(
             {
                 "index": index,
@@ -1057,7 +1309,8 @@ def run_arm(
         **configuration,
         "status": "complete",
         "arm_config_sha256": config_sha,
-        "initial_model": str(initial_model),
+        "initial_model": str(registered_initial_model),
+        "effective_initial_model": str(initial_model),
         "transfers": transfer_records,
         "stages_completed": stage_records,
         "final_model_sha256": final_model_sha,
@@ -1066,6 +1319,8 @@ def run_arm(
         "evaluation_scope": "development_only",
         "development_metrics": development_metrics,
     }
+    if sha256_file(registered_initial_model) != registered_initial_sha:
+        raise ArmError("registered initial model changed during the study arm")
     result = {
         "schema": RESULT_SCHEMA,
         "status": "complete",
