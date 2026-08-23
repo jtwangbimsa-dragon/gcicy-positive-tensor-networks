@@ -909,15 +909,37 @@ def _outputs_match_state(job: Job, state: Mapping[str, Any]) -> bool:
 
 
 def _json_field(value: Any, dotted_path: str) -> Any:
-    current = value
-    for component in dotted_path.split("."):
+    components = dotted_path.split(".")
+    missing = object()
+
+    def descend(current: Any, offset: int) -> Any:
+        if offset == len(components):
+            return current
         if isinstance(current, list):
-            current = current[int(component)]
-        elif isinstance(current, dict) and component in current:
-            current = current[component]
-        else:
-            raise WorkflowError(f"missing JSON field {dotted_path}")
-    return current
+            try:
+                index = int(components[offset])
+            except ValueError:
+                return missing
+            if index < 0 or index >= len(current):
+                return missing
+            return descend(current[index], offset + 1)
+        if isinstance(current, dict):
+            # Preserve the original dotted-path behavior, but backtrack across
+            # progressively longer components for legitimate JSON keys such
+            # as the quantile labels ``q0.0000`` and ``cvar_0.9900``.
+            for end in range(offset + 1, len(components) + 1):
+                key = ".".join(components[offset:end])
+                if key not in current:
+                    continue
+                resolved = descend(current[key], end)
+                if resolved is not missing:
+                    return resolved
+        return missing
+
+    resolved = descend(value, 0)
+    if resolved is missing:
+        raise WorkflowError(f"missing JSON field {dotted_path}")
+    return resolved
 
 
 def _validate_json_gates(job: Job) -> list[dict[str, Any]]:

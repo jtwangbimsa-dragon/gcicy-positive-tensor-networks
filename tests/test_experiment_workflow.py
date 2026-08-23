@@ -209,6 +209,70 @@ def test_cpu_job_is_content_verified_and_skipped_on_resume(tmp_path):
     assert status_rows(plan)[0]["status"] == "invalidated"
 
 
+def test_json_paths_support_list_indices_and_keys_containing_dots(tmp_path):
+    output = "${RUN_ROOT}/jobs/replay/result.json"
+    payload = {
+        "scale_and_precision": [
+            {"precision": "complex64"},
+            {
+                "precision": "complex128",
+                "renormalized": {
+                    "min_eigenvalue_weighted_quantiles": {"q0.0000": 0.03},
+                    "abs_residual_weighted_quantiles": {"q0.9990": 0.006},
+                },
+            },
+        ]
+    }
+    jobs = [
+        {
+            "id": "replay",
+            "phase": "precision-replay",
+            "command": [
+                "${PYTHON}",
+                "-c",
+                (
+                    "from pathlib import Path; "
+                    "p=Path(r'${RUN_ROOT}/jobs/replay/result.json'); "
+                    "p.parent.mkdir(parents=True, exist_ok=True); "
+                    f"p.write_text({json.dumps(json.dumps(payload))})"
+                ),
+            ],
+            "expected_outputs": [output],
+            "json_gates": [
+                {
+                    "path": output,
+                    "field": (
+                        "scale_and_precision.1.renormalized."
+                        "min_eigenvalue_weighted_quantiles.q0.0000"
+                    ),
+                    "gt": 0,
+                }
+            ],
+            "result": {
+                "path": output,
+                "fields": {
+                    "q0.9990": (
+                        "scale_and_precision.1.renormalized."
+                        "abs_residual_weighted_quantiles.q0.9990"
+                    )
+                },
+            },
+        }
+    ]
+    plan = load_test_plan(write_manifest(tmp_path, jobs=jobs))
+    initialize_run_root(
+        plan,
+        frozen_inputs=verify_frozen_inputs(plan),
+        source_identity={"commit": "test", "branch": "exp/test", "status_porcelain": ""},
+    )
+
+    counts = run_workflow(plan, gpu_id="0", lock_root=tmp_path / "locks")
+    assert counts == {"succeeded": 1, "skipped": 0, "failed": 0, "blocked": 0}
+    summary_dir = summarize_results(plan)
+    summary = json.loads((summary_dir / "summary.json").read_text(encoding="utf-8"))
+    assert summary["rows"][0]["q0.9990"] == 0.006
+
+
 def test_campaign_lock_rejects_a_second_runner(tmp_path):
     paths = write_manifest(
         tmp_path,
