@@ -1,0 +1,2200 @@
+{
+  "schema": "gcicy-tn-gpu-workflow-v1",
+  "campaign_id": "x21-architecture-capacity-v1",
+  "description": "Independent post-v1 X21 complete-q121 architecture-capacity experiment at k={20,24}, D={8,14}, with a uniform plateau stopping rule, complex64 training, zero-update complex128 development replay, and a deterministic D16 promotion decision.",
+  "release_base": {
+    "software_version": "1.0.0",
+    "git_commit": "9f95071647aaf89bd520effeb322b16345d63157",
+    "zenodo_doi": "10.5281/zenodo.21963526",
+    "zenodo_archive_sha256": "587be3188b8d7a68837c3e073b062174a56244a57d7fbf3e8185a82059b608",
+    "arxiv_v1_source_sha256": "bbd16a674d93ccd6da91633312610f16cdfaf2414e4a29bcbb58b2f82fc9c50f",
+    "arxiv_v1_pdf_sha256": "3abdb11eac8cc10b41883b396cf6eeb163e23ccbb84e86b021764ce525c603b0"
+  },
+  "variables": {
+    "SOURCE": "${FROZEN_ROOT}/outputs/pipeline/type21_k1_energy_highstat_pointb64_20260718/k1_energy_highstat.npz",
+    "COMMON_K4": "${FROZEN_ROOT}/outputs/pipeline/type21_tensor_network_q22_degree_ladder_20260719/q22_k4_teacher_free.pt",
+    "TRAIN_POOL": "${FROZEN_ROOT}/outputs/pipeline/gcicy_tn_common_pools_20260728/X21_train_seed86201_n196608.npz",
+    "SELECTION_POOL": "${FROZEN_ROOT}/outputs/pipeline/gcicy_tn_common_pools_20260728/X21_selection_seed86202_n24576.npz",
+    "DEVELOPMENT_POOL": "${FROZEN_ROOT}/outputs/pipeline/gcicy_tn_common_pools_20260728/X21_confirmation_seed86203_n49152.npz",
+    "PREPARED": "${RUN_ROOT}/prepared",
+    "INITIAL": "${RUN_ROOT}/jobs/initial",
+    "GRID": "${RUN_ROOT}/jobs/grid",
+    "REPLAY": "${RUN_ROOT}/jobs/precision_replay",
+    "DECISION": "${RUN_ROOT}/adjudication"
+  },
+  "protected_paths": [
+    "${FROZEN_ROOT}/arxiv_submission_gcicy_tn_20260817",
+    "${FROZEN_ROOT}/artifact_release",
+    "${FROZEN_ROOT}/artifact_release_tn",
+    "${FROZEN_ROOT}/gcicy paper/generated_tn",
+    "${FROZEN_ROOT}/outputs/pipeline",
+    "${FROZEN_ROOT}/outputs/release"
+  ],
+  "frozen_inputs": [
+    {
+      "role": "x21_source_h1",
+      "path": "${SOURCE}",
+      "bytes": 1472147,
+      "sha256": "a3ec6af6ba33d9500c9c2a930da4565afa6c07cb081e0656aea88aa8dce2f529"
+    },
+    {
+      "role": "x21_q22_k4_common_origin",
+      "path": "${COMMON_K4}",
+      "bytes": 70238,
+      "sha256": "c344b9cbac9032fdf0807d45265665dcd62b581cf99d7c35a5a7d13518bd72ab"
+    },
+    {
+      "role": "x21_train_pool",
+      "path": "${TRAIN_POOL}",
+      "bytes": 93433803,
+      "sha256": "050092ddc3f0847cde4b730ddd33c4e7faa6cbaffbfdafd147b171a5f191cf94"
+    },
+    {
+      "role": "x21_selection_pool",
+      "path": "${SELECTION_POOL}",
+      "bytes": 11684007,
+      "sha256": "d39779ad4bc0dc7bd4381486b198124a563d9a798bfe425a60775e87a1ef7ee9"
+    },
+    {
+      "role": "x21_development_pool",
+      "path": "${DEVELOPMENT_POOL}",
+      "bytes": 23363687,
+      "sha256": "4c4ec82e315351c9a5bebf0b3ba48b611bb8cb4ae433ce8a646e5c00426167cc"
+    }
+  ],
+  "forbidden_inputs": {
+    "policy": "Historical blind and capacity-holdout material is unavailable to every development command, gate, result extractor, and D16 adjudication input.",
+    "paths": [
+      "${FROZEN_ROOT}/outputs/pipeline/type21_q121_d12_final_blind_20260729",
+      "${FROZEN_ROOT}/outputs/pipeline/type21_d8_continuation_capacity_control_20260730/X21_capacity_holdout_seed86206_n98304.npz",
+      "${FROZEN_ROOT}/outputs/pipeline/type21_d8_continuation_capacity_control_20260730/X21_capacity_holdout_seed86207_n98304.npz",
+      "${FROZEN_ROOT}/outputs/pipeline/type21_fixed_d8_degree_scaling_floor1e14_20260807/X21_scaling_final_seed86807_n196608.npz"
+    ],
+    "forbidden_report_fields": ["blind_test", "final_blind", "formal_blind", "capacity_holdout"]
+  },
+  "source_guard": {
+    "release_base_commit": "9f95071647aaf89bd520effeb322b16345d63157",
+    "forbidden_branches": ["main", "master"],
+    "required_branch_prefix": "exp/",
+    "require_clean": true
+  },
+  "environment": {
+    "python": "3.12 recommended",
+    "torch": "2.7.1",
+    "cuda_required": true,
+    "training_precision": "complex64",
+    "development_replay_precision": "complex128",
+    "reference_gpu": "RTX 4090 24 GiB",
+    "note": "This is an independent post-v1 environment and must not be described as the frozen v1 PyTorch 2.5.1 environment."
+  },
+  "scientific_policy": {
+    "geometry": "X21 type-(2,1) P5 x P1 seed 20260802",
+    "source_k": 1,
+    "common_origin_k": 4,
+    "capacity_grid": {
+      "k": [20, 24],
+      "D": [8, 14],
+      "replicates": [1, 2, 3],
+      "primary_result_rows": 12
+    },
+    "architecture": "shared-local-dictionary open-boundary positive tensor network",
+    "physical_dictionary": "fixed complete q=121 canonical matrix-unit dictionary",
+    "coefficient_gauge": "mixed-canonical with center floor(k/2), fixed before epoch zero",
+    "parameter_scope": "all coefficient cores jointly trained; q=121 dictionary, reference H, and positive floor fixed",
+    "estimand": {
+      "name": "uniform-validation-plateau-stopping-rule endpoint contrast",
+      "definition": "Every cell uses the same primary and precision plateau rules and is evaluated after its own rule-triggered training exposure.",
+      "not_claimed": "fixed-update pure architecture-capacity effect",
+      "exposure_record": "The terminal D16 decision records and hashes actual rounds, epochs, optimizer updates, validation evaluations, and trainer runtime for both stages of every seed."
+    },
+    "parameter_count_formula": "P=2*q*(2*D+(k-2)*D^2), q=121",
+    "parameter_counts": {
+      "k20_d8": 282656,
+      "k24_d8": 344608,
+      "k20_d14": 860552,
+      "k24_d14": 1050280,
+      "conditional_k24_d16": 1370688
+    },
+    "training_precision": "complex64 for every optimization and validation-based checkpoint decision",
+    "development_evaluation": "each selected complex64 endpoint is promoted exactly to complex128 without optimizer updates and evaluated on the immutable development-confirmation pool",
+    "selection_role": "development only; this pool has already informed historical model selection",
+    "blind_policy": "no historical blind pool is read; any new blind evaluation requires a separately frozen candidate manifest",
+    "d16_promotion": {
+      "status": "preregistered deterministic decision job; D16 accuracy remains extension-only",
+      "accuracy_jobs_in_this_manifest": 0,
+      "target": {"k": 24, "D": 16, "trainable_real_parameter_count": 1370688},
+      "required_validity": "all twelve complex128 replay rows have minimum metric eigenvalue > 0 and nonpositive metric count = 0",
+      "k24_d14_over_d8_mean_sigma_ratio_le": 0.98,
+      "k24_d14_over_d8_paired_seed_wins_ge": 2,
+      "paired_sigma_win_definition": "strict per-seed inequality sigma(k24,D14)<sigma(k24,D8); a tie is not a win",
+      "k24_d14_over_d8_mean_chi_ratio_le": 1.0,
+      "k24_d14_over_d8_q999_ratio_le": 1.05,
+      "k24_d14_over_d8_cvar_ratio_le": 1.05,
+      "mean_ratio_definition": "For sigma, chi, q999, and CVaR, divide the arithmetic mean over the three k24,D14 seeds by the arithmetic mean over the same three paired k24,D8 seeds.",
+      "missing_evidence_policy": "Any missing, duplicate, malformed, non-finite, wrong-seed, wrong-grid, or hash-inconsistent evidence fails the decision job without creating an artifact.",
+      "extension_rule": "D16 may run only under a new manifest and RUN_ROOT after the complete base aggregate and promotion decision JSON are hash-frozen; the extension must first pass the same full-batch memory gates."
+    }
+  },
+  "defaults": {
+    "working_directory": "${REPO_ROOT}",
+    "environment": {
+      "PYTHONUNBUFFERED": "1",
+      "OMP_NUM_THREADS": "1",
+      "MKL_NUM_THREADS": "1",
+      "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"
+    },
+    "retry": {
+      "max_attempts": 3,
+      "signals": [4, 5, 11],
+      "log_patterns": [],
+      "backoff_seconds": 60
+    }
+  },
+  "jobs": [
+    {
+      "id": "prepare-q121-k4",
+      "phase": "prepare",
+      "command": [
+        "${PYTHON}", "scripts/complete_positive_tensor_network_dictionary.py",
+        "--model", "${COMMON_K4}",
+        "--out", "${PREPARED}/q121_k4_completed.pt",
+        "--summary", "${PREPARED}/q121_k4_completed_summary.json"
+      ],
+      "expected_outputs": [
+        "${PREPARED}/q121_k4_completed.pt",
+        "${PREPARED}/q121_k4_completed_summary.json"
+      ]
+    },
+    {
+      "id": "prepare-floor-1e14",
+      "phase": "prepare",
+      "needs": ["prepare-q121-k4"],
+      "command": [
+        "${PYTHON}", "scripts/set_positive_tensor_network_floor.py",
+        "--model", "${PREPARED}/q121_k4_completed.pt",
+        "--positive-floor", "1e-14",
+        "--out", "${PREPARED}/q121_k4_floor1e14_c128.pt",
+        "--summary", "${PREPARED}/q121_k4_floor1e14_c128_summary.json"
+      ],
+      "expected_outputs": [
+        "${PREPARED}/q121_k4_floor1e14_c128.pt",
+        "${PREPARED}/q121_k4_floor1e14_c128_summary.json"
+      ],
+      "json_gates": [
+        {"path": "${PREPARED}/q121_k4_floor1e14_c128_summary.json", "field": "strictly_positive", "equals": true}
+      ]
+    },
+    {
+      "id": "prepare-complex64-origin",
+      "phase": "prepare",
+      "needs": ["prepare-floor-1e14"],
+      "command": [
+        "${PYTHON}", "scripts/cast_positive_tensor_network_precision.py",
+        "--model", "${PREPARED}/q121_k4_floor1e14_c128.pt",
+        "--precision", "complex64",
+        "--out", "${PREPARED}/q121_k4_floor1e14_c64.pt",
+        "--summary", "${PREPARED}/q121_k4_floor1e14_c64_cast.json"
+      ],
+      "expected_outputs": [
+        "${PREPARED}/q121_k4_floor1e14_c64.pt",
+        "${PREPARED}/q121_k4_floor1e14_c64_cast.json"
+      ],
+      "json_gates": [
+        {"path": "${PREPARED}/q121_k4_floor1e14_c64_cast.json", "field": "source_precision", "equals": "complex128"},
+        {"path": "${PREPARED}/q121_k4_floor1e14_c64_cast.json", "field": "target_precision", "equals": "complex64"},
+        {"path": "${PREPARED}/q121_k4_floor1e14_c64_cast.json", "field": "optimizer_updates", "equals": 0},
+        {"path": "${PREPARED}/q121_k4_floor1e14_c64_cast.json", "field": "maximum_source_dtype_roundtrip_difference", "le": 0.000001}
+      ]
+    },
+    {
+      "id": "prepare-complex64-roundtrip-c128",
+      "phase": "prepare",
+      "needs": ["prepare-complex64-origin"],
+      "command": [
+        "${PYTHON}", "scripts/cast_positive_tensor_network_precision.py",
+        "--model", "${PREPARED}/q121_k4_floor1e14_c64.pt",
+        "--precision", "complex128",
+        "--out", "${PREPARED}/q121_k4_floor1e14_c64_roundtrip_c128.pt",
+        "--summary", "${PREPARED}/q121_k4_floor1e14_c64_roundtrip_c128_cast.json"
+      ],
+      "expected_outputs": [
+        "${PREPARED}/q121_k4_floor1e14_c64_roundtrip_c128.pt",
+        "${PREPARED}/q121_k4_floor1e14_c64_roundtrip_c128_cast.json"
+      ],
+      "json_gates": [
+        {"path": "${PREPARED}/q121_k4_floor1e14_c64_roundtrip_c128_cast.json", "field": "source_precision", "equals": "complex64"},
+        {"path": "${PREPARED}/q121_k4_floor1e14_c64_roundtrip_c128_cast.json", "field": "target_precision", "equals": "complex128"},
+        {"path": "${PREPARED}/q121_k4_floor1e14_c64_roundtrip_c128_cast.json", "field": "optimizer_updates", "equals": 0},
+        {"path": "${PREPARED}/q121_k4_floor1e14_c64_roundtrip_c128_cast.json", "field": "exact_binary_promotion", "equals": true},
+        {"path": "${PREPARED}/q121_k4_floor1e14_c64_roundtrip_c128_cast.json", "field": "maximum_source_dtype_roundtrip_difference", "equals": 0}
+      ]
+    },
+    {
+      "id": "numerical-origin-roundtrip-equivalence",
+      "phase": "numerical-calibration",
+      "needs": ["prepare-floor-1e14", "prepare-complex64-roundtrip-c128"],
+      "resources": {"gpu": true},
+      "command": [
+        "${PYTHON}", "scripts/audit_positive_tensor_network_equivalence.py",
+        "--adapter", "p5p1_type21_k3_1223",
+        "--model-a", "${PREPARED}/q121_k4_floor1e14_c128.pt",
+        "--model-b", "${PREPARED}/q121_k4_floor1e14_c64_roundtrip_c128.pt",
+        "--source-artifact", "${SOURCE}",
+        "--model-seed", "20260802",
+        "--sampling-cluster-size", "6",
+        "--seed", "872001",
+        "--points", "8190",
+        "--workers", "1",
+        "--chunk-size", "546",
+        "--absolute-tolerance", "1e-5",
+        "--relative-metric-tolerance", "1e-5",
+        "--device", "cuda",
+        "--out", "${PREPARED}/q121_k4_c64_roundtrip_equivalence.json"
+      ],
+      "expected_outputs": ["${PREPARED}/q121_k4_c64_roundtrip_equivalence.json"],
+      "json_gates": [
+        {"path": "${PREPARED}/q121_k4_c64_roundtrip_equivalence.json", "field": "success", "equals": true}
+      ],
+      "scientific": {
+        "role": "zero-update precision-roundtrip calibration; not a metric result"
+      }
+    },
+    {
+      "id": "resource-preflight-k24-d14",
+      "phase": "resource-preflight-d14",
+      "needs": ["initial-equivalence-k24-d14-r1"],
+      "resources": {"gpu": true},
+      "command": [
+        "${PYTHON}", "scripts/train_type11_positive_tensor_network.py",
+        "--adapter", "p5p1_type21_k3_1223",
+        "--model-seed", "20260802",
+        "--sampling-cluster-size", "6",
+        "--source-artifact", "${SOURCE}",
+        "--site-count", "24",
+        "--initial-model", "${INITIAL}/k24_d14_r1/canonical/model.pt",
+        "--bond-dimension", "14",
+        "--kappa-source", "initial_model",
+        "--positive-floor", "1e-14",
+        "--initialization-noise", "0",
+        "--train-points", "196608",
+        "--train-seed", "86201",
+        "--train-common-pool", "${TRAIN_POOL}",
+        "--validation-points", "24576",
+        "--validation-seed", "86202",
+        "--validation-common-pool", "${SELECTION_POOL}",
+        "--workers", "1",
+        "--epochs", "1",
+        "--batch-size", "1024",
+        "--learning-rate", "2e-4",
+        "--gradient-clip-norm", "2",
+        "--potential-loss-weight", "0",
+        "--metric-loss-weight", "0",
+        "--log-energy-loss-weight", "1",
+        "--ma-loss-weight", "1",
+        "--tail-loss-weight", "0.1",
+        "--tail-fraction", "0.02",
+        "--tail-ratio-threshold", "1.5",
+        "--tail-smooth-temperature", "0.05",
+        "--torch-seed", "20268000",
+        "--device", "cuda",
+        "--precision", "complex64",
+        "--checkpoint", "${RUN_ROOT}/resource_preflight/k24_d14/checkpoint.pt",
+        "--out", "${RUN_ROOT}/resource_preflight/k24_d14/model.pt",
+        "--summary", "${RUN_ROOT}/resource_preflight/k24_d14/summary.json"
+      ],
+      "expected_outputs": [
+        "${RUN_ROOT}/resource_preflight/k24_d14/checkpoint.pt",
+        "${RUN_ROOT}/resource_preflight/k24_d14/model.pt",
+        "${RUN_ROOT}/resource_preflight/k24_d14/summary.json"
+      ],
+      "json_gates": [
+        {"path": "${RUN_ROOT}/resource_preflight/k24_d14/summary.json", "field": "termination_reason", "equals": "completed_requested_epochs"},
+        {"path": "${RUN_ROOT}/resource_preflight/k24_d14/summary.json", "field": "precision", "equals": "complex64"},
+        {"path": "${RUN_ROOT}/resource_preflight/k24_d14/summary.json", "field": "physical_dictionary_rank", "equals": 121},
+        {"path": "${RUN_ROOT}/resource_preflight/k24_d14/summary.json", "field": "trainable_physical_dictionary", "equals": false},
+        {"path": "${RUN_ROOT}/resource_preflight/k24_d14/summary.json", "field": "trainable_real_parameter_count", "equals": 1050280},
+        {"path": "${RUN_ROOT}/resource_preflight/k24_d14/summary.json", "field": "best_validation.minimum_metric_eigenvalue", "gt": 0},
+        {"path": "${RUN_ROOT}/resource_preflight/k24_d14/summary.json", "field": "device_memory.maximum_allocated_bytes", "gt": 0},
+        {"path": "${RUN_ROOT}/resource_preflight/k24_d14/summary.json", "field": "device_memory.maximum_allocated_bytes", "le": 21474836480},
+        {"path": "${RUN_ROOT}/resource_preflight/k24_d14/summary.json", "field": "device_memory.maximum_reserved_bytes", "le": 23085449216}
+      ],
+      "resume": {
+        "checkpoint": "${RUN_ROOT}/resource_preflight/k24_d14/checkpoint.pt",
+        "flag": "--resume-checkpoint"
+      },
+      "scientific": {
+        "role": "full-pool one-epoch maximum-cell forward/backward/Adam/validation/checkpoint preflight; never used as a scientific initialization or result",
+        "batch_fallback": "forbidden; an OOM requires a new registered optimizer-path manifest"
+      }
+    },
+    {
+      "id": "decide-d16-promotion",
+      "phase": "promotion-decision",
+      "needs": [
+        "endpoint-k20-d8-r1", "endpoint-k20-d8-r2", "endpoint-k20-d8-r3",
+        "endpoint-k24-d8-r1", "endpoint-k24-d8-r2", "endpoint-k24-d8-r3",
+        "endpoint-k20-d14-r1", "endpoint-k20-d14-r2", "endpoint-k20-d14-r3",
+        "endpoint-k24-d14-r1", "endpoint-k24-d14-r2", "endpoint-k24-d14-r3"
+      ],
+      "command": [
+        "${PYTHON}", "scripts/decide_x21_architecture_capacity_d16.py",
+        "--run-root", "${RUN_ROOT}",
+        "--manifest", "${REPO_ROOT}/experiments/manifests/x21_architecture_capacity_v1.json",
+        "--train-pool", "${TRAIN_POOL}",
+        "--train-pool-sha256", "050092ddc3f0847cde4b730ddd33c4e7faa6cbaffbfdafd147b171a5f191cf94",
+        "--selection-pool", "${SELECTION_POOL}",
+        "--selection-pool-sha256", "d39779ad4bc0dc7bd4381486b198124a563d9a798bfe425a60775e87a1ef7ee9",
+        "--positive-floor", "1e-14",
+        "--mean-sigma-ratio-max", "0.98",
+        "--paired-sigma-wins-min", "2",
+        "--mean-chi-ratio-max", "1.0",
+        "--mean-q999-ratio-max", "1.05",
+        "--mean-cvar-ratio-max", "1.05",
+        "--out", "${DECISION}/d16_promotion_decision.json"
+      ],
+      "expected_outputs": ["${DECISION}/d16_promotion_decision.json"],
+      "json_gates": [
+        {"path": "${DECISION}/d16_promotion_decision.json", "field": "schema", "equals": "x21-architecture-capacity-d16-promotion-decision-v1"},
+        {"path": "${DECISION}/d16_promotion_decision.json", "field": "complete", "equals": true},
+        {"path": "${DECISION}/d16_promotion_decision.json", "field": "row_count", "equals": 12},
+        {"path": "${DECISION}/d16_promotion_decision.json", "field": "completeness.exact_cartesian_closure", "equals": true},
+        {"path": "${DECISION}/d16_promotion_decision.json", "field": "rules_evaluated", "equals": true}
+      ],
+      "retry": {"max_attempts": 1},
+      "scientific": {
+        "role": "create-only deterministic D16 promotion adjudication; false is a valid terminal decision",
+        "blind_inputs_read": false,
+        "accuracy_job": false
+      }
+    }
+  ],
+  "job_templates": [
+    {
+      "id": "initial-sites-k{{k}}-r{{replicate}}",
+      "phase": "capacity-initialization",
+      "matrix": {"k": [20, 24], "replicate": [1, 2, 3]},
+      "needs": ["numerical-origin-roundtrip-equivalence"],
+      "command": [
+        "${PYTHON}", "scripts/resize_positive_tensor_network_sites.py",
+        "--model", "${PREPARED}/q121_k4_floor1e14_c64.pt",
+        "--target-site-count", "{{k}}",
+        "--transfer-rule", "repeat",
+        "--bridge-one-sided-activation-scale", "0.03",
+        "--bridge-noise-seed", "863000{{replicate}}",
+        "--out", "${INITIAL}/k{{k}}_r{{replicate}}/sites.pt",
+        "--summary", "${INITIAL}/k{{k}}_r{{replicate}}/sites_summary.json"
+      ],
+      "expected_outputs": [
+        "${INITIAL}/k{{k}}_r{{replicate}}/sites.pt",
+        "${INITIAL}/k{{k}}_r{{replicate}}/sites_summary.json"
+      ],
+      "scientific": {
+        "initialization": "complex64 common-k4 learned norm repeated exactly with fixed one-sided bridge activation",
+        "paired_seed_role": "site activation depends only on replicate and is shared across D"
+      }
+    },
+    {
+      "id": "initial-bond-k{{k}}-d{{D}}-r{{replicate}}",
+      "phase": "capacity-initialization",
+      "matrix": {"k": [20, 24], "D": [8, 14], "replicate": [1, 2, 3]},
+      "needs": ["initial-sites-k{{k}}-r{{replicate}}"],
+      "command": [
+        "${PYTHON}", "scripts/expand_positive_tensor_network_bond.py",
+        "--model", "${INITIAL}/k{{k}}_r{{replicate}}/sites.pt",
+        "--bond-dimension", "{{D}}",
+        "--initialization-noise", "0",
+        "--one-sided-activation-scale", "0.03",
+        "--seed", "864000{{replicate}}",
+        "--precision", "preserve",
+        "--out", "${INITIAL}/k{{k}}_d{{D}}_r{{replicate}}/raw/model.pt",
+        "--summary", "${INITIAL}/k{{k}}_d{{D}}_r{{replicate}}/raw/bond_summary.json"
+      ],
+      "expected_outputs": [
+        "${INITIAL}/k{{k}}_d{{D}}_r{{replicate}}/raw/model.pt",
+        "${INITIAL}/k{{k}}_d{{D}}_r{{replicate}}/raw/bond_summary.json"
+      ],
+      "json_gates": [
+        {"path": "${INITIAL}/k{{k}}_d{{D}}_r{{replicate}}/raw/bond_summary.json", "field": "precision", "equals": "complex64"},
+        {"path": "${INITIAL}/k{{k}}_d{{D}}_r{{replicate}}/raw/bond_summary.json", "field": "function_preserving_by_construction", "equals": true},
+        {"path": "${INITIAL}/k{{k}}_d{{D}}_r{{replicate}}/raw/bond_summary.json", "field": "new_channels_have_first_order_activation", "equals": true}
+      ],
+      "scientific": {
+        "initialization": "function-preserving one-sided expansion from D=5",
+        "parameter_scope": "cores-only",
+        "paired_seed_role": "bond activation and optimizer seeds depend only on replicate"
+      }
+    },
+    {
+      "id": "initial-canonical-k20-d8-r{{replicate}}",
+      "phase": "capacity-initialization",
+      "matrix": {"replicate": [1, 2, 3]},
+      "needs": ["initial-bond-k20-d8-r{{replicate}}"],
+      "command": [
+        "${PYTHON}", "scripts/canonicalize_positive_tensor_network_artifact.py",
+        "--model", "${INITIAL}/k20_d8_r{{replicate}}/raw/model.pt",
+        "--center", "10",
+        "--out", "${INITIAL}/k20_d8_r{{replicate}}/canonical/model.pt",
+        "--summary", "${INITIAL}/k20_d8_r{{replicate}}/canonical/summary.json"
+      ],
+      "expected_outputs": ["${INITIAL}/k20_d8_r{{replicate}}/canonical/model.pt", "${INITIAL}/k20_d8_r{{replicate}}/canonical/summary.json"],
+      "json_gates": [
+        {"path": "${INITIAL}/k20_d8_r{{replicate}}/canonical/summary.json", "field": "site_count", "equals": 20},
+        {"path": "${INITIAL}/k20_d8_r{{replicate}}/canonical/summary.json", "field": "bond_dimension", "equals": 8},
+        {"path": "${INITIAL}/k20_d8_r{{replicate}}/canonical/summary.json", "field": "center", "equals": 10},
+        {"path": "${INITIAL}/k20_d8_r{{replicate}}/canonical/summary.json", "field": "trainable_real_parameter_count", "equals": 282656}
+      ],
+      "scientific": {"factors": {"k": 20, "D": 8}, "coefficient_gauge": "mixed-canonical-center-10"}
+    },
+    {
+      "id": "initial-canonical-k24-d8-r{{replicate}}",
+      "phase": "capacity-initialization",
+      "matrix": {"replicate": [1, 2, 3]},
+      "needs": ["initial-bond-k24-d8-r{{replicate}}"],
+      "command": [
+        "${PYTHON}", "scripts/canonicalize_positive_tensor_network_artifact.py",
+        "--model", "${INITIAL}/k24_d8_r{{replicate}}/raw/model.pt",
+        "--center", "12",
+        "--out", "${INITIAL}/k24_d8_r{{replicate}}/canonical/model.pt",
+        "--summary", "${INITIAL}/k24_d8_r{{replicate}}/canonical/summary.json"
+      ],
+      "expected_outputs": ["${INITIAL}/k24_d8_r{{replicate}}/canonical/model.pt", "${INITIAL}/k24_d8_r{{replicate}}/canonical/summary.json"],
+      "json_gates": [
+        {"path": "${INITIAL}/k24_d8_r{{replicate}}/canonical/summary.json", "field": "site_count", "equals": 24},
+        {"path": "${INITIAL}/k24_d8_r{{replicate}}/canonical/summary.json", "field": "bond_dimension", "equals": 8},
+        {"path": "${INITIAL}/k24_d8_r{{replicate}}/canonical/summary.json", "field": "center", "equals": 12},
+        {"path": "${INITIAL}/k24_d8_r{{replicate}}/canonical/summary.json", "field": "trainable_real_parameter_count", "equals": 344608}
+      ],
+      "scientific": {"factors": {"k": 24, "D": 8}, "coefficient_gauge": "mixed-canonical-center-12"}
+    },
+    {
+      "id": "initial-canonical-k20-d14-r{{replicate}}",
+      "phase": "capacity-initialization",
+      "matrix": {"replicate": [1, 2, 3]},
+      "needs": ["initial-bond-k20-d14-r{{replicate}}"],
+      "command": [
+        "${PYTHON}", "scripts/canonicalize_positive_tensor_network_artifact.py",
+        "--model", "${INITIAL}/k20_d14_r{{replicate}}/raw/model.pt",
+        "--center", "10",
+        "--out", "${INITIAL}/k20_d14_r{{replicate}}/canonical/model.pt",
+        "--summary", "${INITIAL}/k20_d14_r{{replicate}}/canonical/summary.json"
+      ],
+      "expected_outputs": ["${INITIAL}/k20_d14_r{{replicate}}/canonical/model.pt", "${INITIAL}/k20_d14_r{{replicate}}/canonical/summary.json"],
+      "json_gates": [
+        {"path": "${INITIAL}/k20_d14_r{{replicate}}/canonical/summary.json", "field": "site_count", "equals": 20},
+        {"path": "${INITIAL}/k20_d14_r{{replicate}}/canonical/summary.json", "field": "bond_dimension", "equals": 14},
+        {"path": "${INITIAL}/k20_d14_r{{replicate}}/canonical/summary.json", "field": "center", "equals": 10},
+        {"path": "${INITIAL}/k20_d14_r{{replicate}}/canonical/summary.json", "field": "trainable_real_parameter_count", "equals": 860552}
+      ],
+      "scientific": {"factors": {"k": 20, "D": 14}, "coefficient_gauge": "mixed-canonical-center-10"}
+    },
+    {
+      "id": "initial-canonical-k24-d14-r{{replicate}}",
+      "phase": "capacity-initialization",
+      "matrix": {"replicate": [1, 2, 3]},
+      "needs": ["initial-bond-k24-d14-r{{replicate}}"],
+      "command": [
+        "${PYTHON}", "scripts/canonicalize_positive_tensor_network_artifact.py",
+        "--model", "${INITIAL}/k24_d14_r{{replicate}}/raw/model.pt",
+        "--center", "12",
+        "--out", "${INITIAL}/k24_d14_r{{replicate}}/canonical/model.pt",
+        "--summary", "${INITIAL}/k24_d14_r{{replicate}}/canonical/summary.json"
+      ],
+      "expected_outputs": ["${INITIAL}/k24_d14_r{{replicate}}/canonical/model.pt", "${INITIAL}/k24_d14_r{{replicate}}/canonical/summary.json"],
+      "json_gates": [
+        {"path": "${INITIAL}/k24_d14_r{{replicate}}/canonical/summary.json", "field": "site_count", "equals": 24},
+        {"path": "${INITIAL}/k24_d14_r{{replicate}}/canonical/summary.json", "field": "bond_dimension", "equals": 14},
+        {"path": "${INITIAL}/k24_d14_r{{replicate}}/canonical/summary.json", "field": "center", "equals": 12},
+        {"path": "${INITIAL}/k24_d14_r{{replicate}}/canonical/summary.json", "field": "trainable_real_parameter_count", "equals": 1050280}
+      ],
+      "scientific": {"factors": {"k": 24, "D": 14}, "coefficient_gauge": "mixed-canonical-center-12"}
+    },
+    {
+      "id": "initial-equivalence-k{{k}}-d{{D}}-r{{replicate}}",
+      "phase": "capacity-initialization",
+      "matrix": {"k": [20, 24], "D": [8, 14], "replicate": [1, 2, 3]},
+      "needs": ["initial-canonical-k{{k}}-d{{D}}-r{{replicate}}"],
+      "resources": {"gpu": true},
+      "command": [
+        "${PYTHON}", "scripts/audit_positive_tensor_network_equivalence.py",
+        "--adapter", "p5p1_type21_k3_1223",
+        "--model-a", "${PREPARED}/q121_k4_floor1e14_c64.pt",
+        "--model-b", "${INITIAL}/k{{k}}_d{{D}}_r{{replicate}}/canonical/model.pt",
+        "--source-artifact", "${SOURCE}",
+        "--model-seed", "20260802",
+        "--sampling-cluster-size", "6",
+        "--seed", "8650001",
+        "--points", "8190",
+        "--workers", "1",
+        "--chunk-size", "546",
+        "--absolute-tolerance", "1e-5",
+        "--relative-metric-tolerance", "1e-4",
+        "--allow-different-site-counts",
+        "--device", "cuda",
+        "--out", "${INITIAL}/k{{k}}_d{{D}}_r{{replicate}}/canonical/equivalence.json"
+      ],
+      "expected_outputs": ["${INITIAL}/k{{k}}_d{{D}}_r{{replicate}}/canonical/equivalence.json"],
+      "json_gates": [
+        {"path": "${INITIAL}/k{{k}}_d{{D}}_r{{replicate}}/canonical/equivalence.json", "field": "success", "equals": true}
+      ],
+      "scientific": {"role": "complex64 epoch-zero learned-function and metric equivalence gate"}
+    },
+    {
+      "id": "capacity-primary-k20-d8-r{{replicate}}",
+      "phase": "capacity-grid",
+      "matrix": {
+        "replicate": [
+          1,
+          2,
+          3
+        ]
+      },
+      "needs": [
+        "initial-equivalence-k20-d8-r{{replicate}}",
+        "resource-preflight-k24-d14"
+      ],
+      "resources": {
+        "gpu": true
+      },
+      "command": [
+        "${PYTHON}",
+        "scripts/run_gcicy_tn_plateau_stage.py",
+        "--initial-model",
+        "${INITIAL}/k20_d8_r{{replicate}}/canonical/model.pt",
+        "--stage-dir",
+        "${GRID}/k20_d8_r{{replicate}}/primary",
+        "--max-rounds",
+        "5",
+        "--first-kappa-source",
+        "initial_model",
+        "--continuation-kappa-source",
+        "saved_model",
+        "--",
+        "--adapter",
+        "p5p1_type21_k3_1223",
+        "--model-seed",
+        "20260802",
+        "--sampling-cluster-size",
+        "6",
+        "--source-artifact",
+        "${SOURCE}",
+        "--site-count",
+        "20",
+        "--bond-dimension",
+        "8",
+        "--positive-floor",
+        "1e-14",
+        "--initialization-noise",
+        "0",
+        "--train-points",
+        "196608",
+        "--train-seed",
+        "86201",
+        "--train-common-pool",
+        "${TRAIN_POOL}",
+        "--validation-points",
+        "24576",
+        "--validation-seed",
+        "86202",
+        "--validation-common-pool",
+        "${SELECTION_POOL}",
+        "--workers",
+        "1",
+        "--epochs",
+        "120",
+        "--batch-size",
+        "1024",
+        "--learning-rate",
+        "2e-4",
+        "--gradient-clip-norm",
+        "2",
+        "--potential-loss-weight",
+        "0",
+        "--metric-loss-weight",
+        "0",
+        "--log-energy-loss-weight",
+        "1",
+        "--ma-loss-weight",
+        "1",
+        "--tail-loss-weight",
+        "0.1",
+        "--tail-fraction",
+        "0.02",
+        "--tail-ratio-threshold",
+        "1.5",
+        "--tail-smooth-temperature",
+        "0.05",
+        "--eval-every",
+        "1",
+        "--early-stopping-patience",
+        "8",
+        "--early-stopping-min-relative-improvement",
+        "0.005",
+        "--torch-seed",
+        "866000{{replicate}}",
+        "--device",
+        "cuda",
+        "--precision",
+        "complex64"
+      ],
+      "expected_outputs": [
+        "${GRID}/k20_d8_r{{replicate}}/primary/plateau_model.pt",
+        "${GRID}/k20_d8_r{{replicate}}/primary/plateau_summary.json",
+        "${GRID}/k20_d8_r{{replicate}}/primary/stage_summary.json"
+      ],
+      "json_gates": [
+        {
+          "path": "${GRID}/k20_d8_r{{replicate}}/primary/stage_summary.json",
+          "field": "status",
+          "equals": "validation_plateau"
+        },
+        {
+          "path": "${GRID}/k20_d8_r{{replicate}}/primary/plateau_summary.json",
+          "field": "precision",
+          "equals": "complex64"
+        },
+        {
+          "path": "${GRID}/k20_d8_r{{replicate}}/primary/plateau_summary.json",
+          "field": "physical_dictionary_rank",
+          "equals": 121
+        },
+        {
+          "path": "${GRID}/k20_d8_r{{replicate}}/primary/plateau_summary.json",
+          "field": "trainable_physical_dictionary",
+          "equals": false
+        },
+        {
+          "path": "${GRID}/k20_d8_r{{replicate}}/primary/plateau_summary.json",
+          "field": "best_validation.minimum_metric_eigenvalue",
+          "gt": 0
+        },
+        {
+          "path": "${GRID}/k20_d8_r{{replicate}}/primary/plateau_summary.json",
+          "field": "site_count",
+          "equals": 20
+        },
+        {
+          "path": "${GRID}/k20_d8_r{{replicate}}/primary/plateau_summary.json",
+          "field": "bond_dimension",
+          "equals": 8
+        },
+        {
+          "path": "${GRID}/k20_d8_r{{replicate}}/primary/plateau_summary.json",
+          "field": "trainable_real_parameter_count",
+          "equals": 282656
+        },
+        {
+          "path": "${GRID}/k20_d8_r{{replicate}}/primary/plateau_summary.json",
+          "field": "positive_floor",
+          "equals": 1e-14
+        },
+        {
+          "path": "${GRID}/k20_d8_r{{replicate}}/primary/plateau_summary.json",
+          "field": "physical_dictionary_gauge",
+          "equals": "fixed"
+        },
+        {
+          "path": "${GRID}/k20_d8_r{{replicate}}/primary/plateau_summary.json",
+          "field": "train.common_pool",
+          "equals": "${TRAIN_POOL}"
+        },
+        {
+          "path": "${GRID}/k20_d8_r{{replicate}}/primary/plateau_summary.json",
+          "field": "train.common_pool_sha256",
+          "equals": "050092ddc3f0847cde4b730ddd33c4e7faa6cbaffbfdafd147b171a5f191cf94"
+        },
+        {
+          "path": "${GRID}/k20_d8_r{{replicate}}/primary/plateau_summary.json",
+          "field": "validation.common_pool",
+          "equals": "${SELECTION_POOL}"
+        },
+        {
+          "path": "${GRID}/k20_d8_r{{replicate}}/primary/plateau_summary.json",
+          "field": "validation.common_pool_sha256",
+          "equals": "d39779ad4bc0dc7bd4381486b198124a563d9a798bfe425a60775e87a1ef7ee9"
+        }
+      ],
+      "scientific": {
+        "initialization": "direct-complete-q121-common-origin",
+        "parameter_scope": "cores-only",
+        "optimizer_path": "complex64-standard-primary",
+        "factors": {
+          "k": 20,
+          "D": 8,
+          "trainable_real_parameter_count": 282656
+        }
+      }
+    },
+    {
+      "id": "capacity-primary-k24-d8-r{{replicate}}",
+      "phase": "capacity-grid",
+      "matrix": {
+        "replicate": [
+          1,
+          2,
+          3
+        ]
+      },
+      "needs": [
+        "initial-equivalence-k24-d8-r{{replicate}}",
+        "resource-preflight-k24-d14"
+      ],
+      "resources": {
+        "gpu": true
+      },
+      "command": [
+        "${PYTHON}",
+        "scripts/run_gcicy_tn_plateau_stage.py",
+        "--initial-model",
+        "${INITIAL}/k24_d8_r{{replicate}}/canonical/model.pt",
+        "--stage-dir",
+        "${GRID}/k24_d8_r{{replicate}}/primary",
+        "--max-rounds",
+        "5",
+        "--first-kappa-source",
+        "initial_model",
+        "--continuation-kappa-source",
+        "saved_model",
+        "--",
+        "--adapter",
+        "p5p1_type21_k3_1223",
+        "--model-seed",
+        "20260802",
+        "--sampling-cluster-size",
+        "6",
+        "--source-artifact",
+        "${SOURCE}",
+        "--site-count",
+        "24",
+        "--bond-dimension",
+        "8",
+        "--positive-floor",
+        "1e-14",
+        "--initialization-noise",
+        "0",
+        "--train-points",
+        "196608",
+        "--train-seed",
+        "86201",
+        "--train-common-pool",
+        "${TRAIN_POOL}",
+        "--validation-points",
+        "24576",
+        "--validation-seed",
+        "86202",
+        "--validation-common-pool",
+        "${SELECTION_POOL}",
+        "--workers",
+        "1",
+        "--epochs",
+        "120",
+        "--batch-size",
+        "1024",
+        "--learning-rate",
+        "2e-4",
+        "--gradient-clip-norm",
+        "2",
+        "--potential-loss-weight",
+        "0",
+        "--metric-loss-weight",
+        "0",
+        "--log-energy-loss-weight",
+        "1",
+        "--ma-loss-weight",
+        "1",
+        "--tail-loss-weight",
+        "0.1",
+        "--tail-fraction",
+        "0.02",
+        "--tail-ratio-threshold",
+        "1.5",
+        "--tail-smooth-temperature",
+        "0.05",
+        "--eval-every",
+        "1",
+        "--early-stopping-patience",
+        "8",
+        "--early-stopping-min-relative-improvement",
+        "0.005",
+        "--torch-seed",
+        "866000{{replicate}}",
+        "--device",
+        "cuda",
+        "--precision",
+        "complex64"
+      ],
+      "expected_outputs": [
+        "${GRID}/k24_d8_r{{replicate}}/primary/plateau_model.pt",
+        "${GRID}/k24_d8_r{{replicate}}/primary/plateau_summary.json",
+        "${GRID}/k24_d8_r{{replicate}}/primary/stage_summary.json"
+      ],
+      "json_gates": [
+        {
+          "path": "${GRID}/k24_d8_r{{replicate}}/primary/stage_summary.json",
+          "field": "status",
+          "equals": "validation_plateau"
+        },
+        {
+          "path": "${GRID}/k24_d8_r{{replicate}}/primary/plateau_summary.json",
+          "field": "precision",
+          "equals": "complex64"
+        },
+        {
+          "path": "${GRID}/k24_d8_r{{replicate}}/primary/plateau_summary.json",
+          "field": "physical_dictionary_rank",
+          "equals": 121
+        },
+        {
+          "path": "${GRID}/k24_d8_r{{replicate}}/primary/plateau_summary.json",
+          "field": "trainable_physical_dictionary",
+          "equals": false
+        },
+        {
+          "path": "${GRID}/k24_d8_r{{replicate}}/primary/plateau_summary.json",
+          "field": "best_validation.minimum_metric_eigenvalue",
+          "gt": 0
+        },
+        {
+          "path": "${GRID}/k24_d8_r{{replicate}}/primary/plateau_summary.json",
+          "field": "site_count",
+          "equals": 24
+        },
+        {
+          "path": "${GRID}/k24_d8_r{{replicate}}/primary/plateau_summary.json",
+          "field": "bond_dimension",
+          "equals": 8
+        },
+        {
+          "path": "${GRID}/k24_d8_r{{replicate}}/primary/plateau_summary.json",
+          "field": "trainable_real_parameter_count",
+          "equals": 344608
+        },
+        {
+          "path": "${GRID}/k24_d8_r{{replicate}}/primary/plateau_summary.json",
+          "field": "positive_floor",
+          "equals": 1e-14
+        },
+        {
+          "path": "${GRID}/k24_d8_r{{replicate}}/primary/plateau_summary.json",
+          "field": "physical_dictionary_gauge",
+          "equals": "fixed"
+        },
+        {
+          "path": "${GRID}/k24_d8_r{{replicate}}/primary/plateau_summary.json",
+          "field": "train.common_pool",
+          "equals": "${TRAIN_POOL}"
+        },
+        {
+          "path": "${GRID}/k24_d8_r{{replicate}}/primary/plateau_summary.json",
+          "field": "train.common_pool_sha256",
+          "equals": "050092ddc3f0847cde4b730ddd33c4e7faa6cbaffbfdafd147b171a5f191cf94"
+        },
+        {
+          "path": "${GRID}/k24_d8_r{{replicate}}/primary/plateau_summary.json",
+          "field": "validation.common_pool",
+          "equals": "${SELECTION_POOL}"
+        },
+        {
+          "path": "${GRID}/k24_d8_r{{replicate}}/primary/plateau_summary.json",
+          "field": "validation.common_pool_sha256",
+          "equals": "d39779ad4bc0dc7bd4381486b198124a563d9a798bfe425a60775e87a1ef7ee9"
+        }
+      ],
+      "scientific": {
+        "initialization": "direct-complete-q121-common-origin",
+        "parameter_scope": "cores-only",
+        "optimizer_path": "complex64-standard-primary",
+        "factors": {
+          "k": 24,
+          "D": 8,
+          "trainable_real_parameter_count": 344608
+        }
+      }
+    },
+    {
+      "id": "capacity-primary-k20-d14-r{{replicate}}",
+      "phase": "capacity-grid",
+      "matrix": {
+        "replicate": [
+          1,
+          2,
+          3
+        ]
+      },
+      "needs": [
+        "initial-equivalence-k20-d14-r{{replicate}}",
+        "resource-preflight-k24-d14"
+      ],
+      "resources": {
+        "gpu": true
+      },
+      "command": [
+        "${PYTHON}",
+        "scripts/run_gcicy_tn_plateau_stage.py",
+        "--initial-model",
+        "${INITIAL}/k20_d14_r{{replicate}}/canonical/model.pt",
+        "--stage-dir",
+        "${GRID}/k20_d14_r{{replicate}}/primary",
+        "--max-rounds",
+        "5",
+        "--first-kappa-source",
+        "initial_model",
+        "--continuation-kappa-source",
+        "saved_model",
+        "--",
+        "--adapter",
+        "p5p1_type21_k3_1223",
+        "--model-seed",
+        "20260802",
+        "--sampling-cluster-size",
+        "6",
+        "--source-artifact",
+        "${SOURCE}",
+        "--site-count",
+        "20",
+        "--bond-dimension",
+        "14",
+        "--positive-floor",
+        "1e-14",
+        "--initialization-noise",
+        "0",
+        "--train-points",
+        "196608",
+        "--train-seed",
+        "86201",
+        "--train-common-pool",
+        "${TRAIN_POOL}",
+        "--validation-points",
+        "24576",
+        "--validation-seed",
+        "86202",
+        "--validation-common-pool",
+        "${SELECTION_POOL}",
+        "--workers",
+        "1",
+        "--epochs",
+        "120",
+        "--batch-size",
+        "1024",
+        "--learning-rate",
+        "2e-4",
+        "--gradient-clip-norm",
+        "2",
+        "--potential-loss-weight",
+        "0",
+        "--metric-loss-weight",
+        "0",
+        "--log-energy-loss-weight",
+        "1",
+        "--ma-loss-weight",
+        "1",
+        "--tail-loss-weight",
+        "0.1",
+        "--tail-fraction",
+        "0.02",
+        "--tail-ratio-threshold",
+        "1.5",
+        "--tail-smooth-temperature",
+        "0.05",
+        "--eval-every",
+        "1",
+        "--early-stopping-patience",
+        "8",
+        "--early-stopping-min-relative-improvement",
+        "0.005",
+        "--torch-seed",
+        "866000{{replicate}}",
+        "--device",
+        "cuda",
+        "--precision",
+        "complex64"
+      ],
+      "expected_outputs": [
+        "${GRID}/k20_d14_r{{replicate}}/primary/plateau_model.pt",
+        "${GRID}/k20_d14_r{{replicate}}/primary/plateau_summary.json",
+        "${GRID}/k20_d14_r{{replicate}}/primary/stage_summary.json"
+      ],
+      "json_gates": [
+        {
+          "path": "${GRID}/k20_d14_r{{replicate}}/primary/stage_summary.json",
+          "field": "status",
+          "equals": "validation_plateau"
+        },
+        {
+          "path": "${GRID}/k20_d14_r{{replicate}}/primary/plateau_summary.json",
+          "field": "precision",
+          "equals": "complex64"
+        },
+        {
+          "path": "${GRID}/k20_d14_r{{replicate}}/primary/plateau_summary.json",
+          "field": "physical_dictionary_rank",
+          "equals": 121
+        },
+        {
+          "path": "${GRID}/k20_d14_r{{replicate}}/primary/plateau_summary.json",
+          "field": "trainable_physical_dictionary",
+          "equals": false
+        },
+        {
+          "path": "${GRID}/k20_d14_r{{replicate}}/primary/plateau_summary.json",
+          "field": "best_validation.minimum_metric_eigenvalue",
+          "gt": 0
+        },
+        {
+          "path": "${GRID}/k20_d14_r{{replicate}}/primary/plateau_summary.json",
+          "field": "site_count",
+          "equals": 20
+        },
+        {
+          "path": "${GRID}/k20_d14_r{{replicate}}/primary/plateau_summary.json",
+          "field": "bond_dimension",
+          "equals": 14
+        },
+        {
+          "path": "${GRID}/k20_d14_r{{replicate}}/primary/plateau_summary.json",
+          "field": "trainable_real_parameter_count",
+          "equals": 860552
+        },
+        {
+          "path": "${GRID}/k20_d14_r{{replicate}}/primary/plateau_summary.json",
+          "field": "positive_floor",
+          "equals": 1e-14
+        },
+        {
+          "path": "${GRID}/k20_d14_r{{replicate}}/primary/plateau_summary.json",
+          "field": "physical_dictionary_gauge",
+          "equals": "fixed"
+        },
+        {
+          "path": "${GRID}/k20_d14_r{{replicate}}/primary/plateau_summary.json",
+          "field": "train.common_pool",
+          "equals": "${TRAIN_POOL}"
+        },
+        {
+          "path": "${GRID}/k20_d14_r{{replicate}}/primary/plateau_summary.json",
+          "field": "train.common_pool_sha256",
+          "equals": "050092ddc3f0847cde4b730ddd33c4e7faa6cbaffbfdafd147b171a5f191cf94"
+        },
+        {
+          "path": "${GRID}/k20_d14_r{{replicate}}/primary/plateau_summary.json",
+          "field": "validation.common_pool",
+          "equals": "${SELECTION_POOL}"
+        },
+        {
+          "path": "${GRID}/k20_d14_r{{replicate}}/primary/plateau_summary.json",
+          "field": "validation.common_pool_sha256",
+          "equals": "d39779ad4bc0dc7bd4381486b198124a563d9a798bfe425a60775e87a1ef7ee9"
+        }
+      ],
+      "scientific": {
+        "initialization": "direct-complete-q121-common-origin",
+        "parameter_scope": "cores-only",
+        "optimizer_path": "complex64-standard-primary",
+        "factors": {
+          "k": 20,
+          "D": 14,
+          "trainable_real_parameter_count": 860552
+        }
+      }
+    },
+    {
+      "id": "capacity-primary-k24-d14-r{{replicate}}",
+      "phase": "capacity-grid",
+      "matrix": {
+        "replicate": [
+          1,
+          2,
+          3
+        ]
+      },
+      "needs": [
+        "initial-equivalence-k24-d14-r{{replicate}}",
+        "resource-preflight-k24-d14"
+      ],
+      "resources": {
+        "gpu": true
+      },
+      "command": [
+        "${PYTHON}",
+        "scripts/run_gcicy_tn_plateau_stage.py",
+        "--initial-model",
+        "${INITIAL}/k24_d14_r{{replicate}}/canonical/model.pt",
+        "--stage-dir",
+        "${GRID}/k24_d14_r{{replicate}}/primary",
+        "--max-rounds",
+        "5",
+        "--first-kappa-source",
+        "initial_model",
+        "--continuation-kappa-source",
+        "saved_model",
+        "--",
+        "--adapter",
+        "p5p1_type21_k3_1223",
+        "--model-seed",
+        "20260802",
+        "--sampling-cluster-size",
+        "6",
+        "--source-artifact",
+        "${SOURCE}",
+        "--site-count",
+        "24",
+        "--bond-dimension",
+        "14",
+        "--positive-floor",
+        "1e-14",
+        "--initialization-noise",
+        "0",
+        "--train-points",
+        "196608",
+        "--train-seed",
+        "86201",
+        "--train-common-pool",
+        "${TRAIN_POOL}",
+        "--validation-points",
+        "24576",
+        "--validation-seed",
+        "86202",
+        "--validation-common-pool",
+        "${SELECTION_POOL}",
+        "--workers",
+        "1",
+        "--epochs",
+        "120",
+        "--batch-size",
+        "1024",
+        "--learning-rate",
+        "2e-4",
+        "--gradient-clip-norm",
+        "2",
+        "--potential-loss-weight",
+        "0",
+        "--metric-loss-weight",
+        "0",
+        "--log-energy-loss-weight",
+        "1",
+        "--ma-loss-weight",
+        "1",
+        "--tail-loss-weight",
+        "0.1",
+        "--tail-fraction",
+        "0.02",
+        "--tail-ratio-threshold",
+        "1.5",
+        "--tail-smooth-temperature",
+        "0.05",
+        "--eval-every",
+        "1",
+        "--early-stopping-patience",
+        "8",
+        "--early-stopping-min-relative-improvement",
+        "0.005",
+        "--torch-seed",
+        "866000{{replicate}}",
+        "--device",
+        "cuda",
+        "--precision",
+        "complex64"
+      ],
+      "expected_outputs": [
+        "${GRID}/k24_d14_r{{replicate}}/primary/plateau_model.pt",
+        "${GRID}/k24_d14_r{{replicate}}/primary/plateau_summary.json",
+        "${GRID}/k24_d14_r{{replicate}}/primary/stage_summary.json"
+      ],
+      "json_gates": [
+        {
+          "path": "${GRID}/k24_d14_r{{replicate}}/primary/stage_summary.json",
+          "field": "status",
+          "equals": "validation_plateau"
+        },
+        {
+          "path": "${GRID}/k24_d14_r{{replicate}}/primary/plateau_summary.json",
+          "field": "precision",
+          "equals": "complex64"
+        },
+        {
+          "path": "${GRID}/k24_d14_r{{replicate}}/primary/plateau_summary.json",
+          "field": "physical_dictionary_rank",
+          "equals": 121
+        },
+        {
+          "path": "${GRID}/k24_d14_r{{replicate}}/primary/plateau_summary.json",
+          "field": "trainable_physical_dictionary",
+          "equals": false
+        },
+        {
+          "path": "${GRID}/k24_d14_r{{replicate}}/primary/plateau_summary.json",
+          "field": "best_validation.minimum_metric_eigenvalue",
+          "gt": 0
+        },
+        {
+          "path": "${GRID}/k24_d14_r{{replicate}}/primary/plateau_summary.json",
+          "field": "site_count",
+          "equals": 24
+        },
+        {
+          "path": "${GRID}/k24_d14_r{{replicate}}/primary/plateau_summary.json",
+          "field": "bond_dimension",
+          "equals": 14
+        },
+        {
+          "path": "${GRID}/k24_d14_r{{replicate}}/primary/plateau_summary.json",
+          "field": "trainable_real_parameter_count",
+          "equals": 1050280
+        },
+        {
+          "path": "${GRID}/k24_d14_r{{replicate}}/primary/plateau_summary.json",
+          "field": "positive_floor",
+          "equals": 1e-14
+        },
+        {
+          "path": "${GRID}/k24_d14_r{{replicate}}/primary/plateau_summary.json",
+          "field": "physical_dictionary_gauge",
+          "equals": "fixed"
+        },
+        {
+          "path": "${GRID}/k24_d14_r{{replicate}}/primary/plateau_summary.json",
+          "field": "train.common_pool",
+          "equals": "${TRAIN_POOL}"
+        },
+        {
+          "path": "${GRID}/k24_d14_r{{replicate}}/primary/plateau_summary.json",
+          "field": "train.common_pool_sha256",
+          "equals": "050092ddc3f0847cde4b730ddd33c4e7faa6cbaffbfdafd147b171a5f191cf94"
+        },
+        {
+          "path": "${GRID}/k24_d14_r{{replicate}}/primary/plateau_summary.json",
+          "field": "validation.common_pool",
+          "equals": "${SELECTION_POOL}"
+        },
+        {
+          "path": "${GRID}/k24_d14_r{{replicate}}/primary/plateau_summary.json",
+          "field": "validation.common_pool_sha256",
+          "equals": "d39779ad4bc0dc7bd4381486b198124a563d9a798bfe425a60775e87a1ef7ee9"
+        }
+      ],
+      "scientific": {
+        "initialization": "direct-complete-q121-common-origin",
+        "parameter_scope": "cores-only",
+        "optimizer_path": "complex64-standard-primary",
+        "factors": {
+          "k": 24,
+          "D": 14,
+          "trainable_real_parameter_count": 1050280
+        }
+      }
+    },
+    {
+      "id": "capacity-precision-k20-d8-r{{replicate}}",
+      "phase": "capacity-grid",
+      "matrix": {
+        "replicate": [
+          1,
+          2,
+          3
+        ]
+      },
+      "needs": [
+        "capacity-primary-k20-d8-r{{replicate}}"
+      ],
+      "resources": {
+        "gpu": true
+      },
+      "command": [
+        "${PYTHON}",
+        "scripts/run_gcicy_tn_plateau_stage.py",
+        "--initial-model",
+        "${GRID}/k20_d8_r{{replicate}}/primary/plateau_model.pt",
+        "--stage-dir",
+        "${GRID}/k20_d8_r{{replicate}}/precision",
+        "--max-rounds",
+        "5",
+        "--first-kappa-source",
+        "saved_model",
+        "--continuation-kappa-source",
+        "saved_model",
+        "--",
+        "--adapter",
+        "p5p1_type21_k3_1223",
+        "--model-seed",
+        "20260802",
+        "--sampling-cluster-size",
+        "6",
+        "--source-artifact",
+        "${SOURCE}",
+        "--site-count",
+        "20",
+        "--bond-dimension",
+        "8",
+        "--positive-floor",
+        "1e-14",
+        "--initialization-noise",
+        "0",
+        "--train-points",
+        "196608",
+        "--train-seed",
+        "86201",
+        "--train-common-pool",
+        "${TRAIN_POOL}",
+        "--validation-points",
+        "24576",
+        "--validation-seed",
+        "86202",
+        "--validation-common-pool",
+        "${SELECTION_POOL}",
+        "--workers",
+        "1",
+        "--epochs",
+        "120",
+        "--batch-size",
+        "1024",
+        "--learning-rate",
+        "3e-5",
+        "--gradient-clip-norm",
+        "2",
+        "--potential-loss-weight",
+        "0",
+        "--metric-loss-weight",
+        "0",
+        "--log-energy-loss-weight",
+        "1",
+        "--ma-loss-weight",
+        "1",
+        "--tail-loss-weight",
+        "0.1",
+        "--tail-fraction",
+        "0.02",
+        "--tail-ratio-threshold",
+        "1.5",
+        "--tail-smooth-temperature",
+        "0.05",
+        "--eval-every",
+        "1",
+        "--early-stopping-patience",
+        "8",
+        "--early-stopping-min-relative-improvement",
+        "0.003",
+        "--torch-seed",
+        "866000{{replicate}}",
+        "--device",
+        "cuda",
+        "--precision",
+        "complex64"
+      ],
+      "expected_outputs": [
+        "${GRID}/k20_d8_r{{replicate}}/precision/plateau_model.pt",
+        "${GRID}/k20_d8_r{{replicate}}/precision/plateau_summary.json",
+        "${GRID}/k20_d8_r{{replicate}}/precision/stage_summary.json"
+      ],
+      "json_gates": [
+        {
+          "path": "${GRID}/k20_d8_r{{replicate}}/precision/stage_summary.json",
+          "field": "status",
+          "equals": "validation_plateau"
+        },
+        {
+          "path": "${GRID}/k20_d8_r{{replicate}}/precision/plateau_summary.json",
+          "field": "precision",
+          "equals": "complex64"
+        },
+        {
+          "path": "${GRID}/k20_d8_r{{replicate}}/precision/plateau_summary.json",
+          "field": "physical_dictionary_rank",
+          "equals": 121
+        },
+        {
+          "path": "${GRID}/k20_d8_r{{replicate}}/precision/plateau_summary.json",
+          "field": "trainable_physical_dictionary",
+          "equals": false
+        },
+        {
+          "path": "${GRID}/k20_d8_r{{replicate}}/precision/plateau_summary.json",
+          "field": "best_validation.minimum_metric_eigenvalue",
+          "gt": 0
+        },
+        {
+          "path": "${GRID}/k20_d8_r{{replicate}}/precision/plateau_summary.json",
+          "field": "site_count",
+          "equals": 20
+        },
+        {
+          "path": "${GRID}/k20_d8_r{{replicate}}/precision/plateau_summary.json",
+          "field": "bond_dimension",
+          "equals": 8
+        },
+        {
+          "path": "${GRID}/k20_d8_r{{replicate}}/precision/plateau_summary.json",
+          "field": "trainable_real_parameter_count",
+          "equals": 282656
+        },
+        {
+          "path": "${GRID}/k20_d8_r{{replicate}}/precision/plateau_summary.json",
+          "field": "positive_floor",
+          "equals": 1e-14
+        },
+        {
+          "path": "${GRID}/k20_d8_r{{replicate}}/precision/plateau_summary.json",
+          "field": "physical_dictionary_gauge",
+          "equals": "fixed"
+        },
+        {
+          "path": "${GRID}/k20_d8_r{{replicate}}/precision/plateau_summary.json",
+          "field": "train.common_pool",
+          "equals": "${TRAIN_POOL}"
+        },
+        {
+          "path": "${GRID}/k20_d8_r{{replicate}}/precision/plateau_summary.json",
+          "field": "train.common_pool_sha256",
+          "equals": "050092ddc3f0847cde4b730ddd33c4e7faa6cbaffbfdafd147b171a5f191cf94"
+        },
+        {
+          "path": "${GRID}/k20_d8_r{{replicate}}/precision/plateau_summary.json",
+          "field": "validation.common_pool",
+          "equals": "${SELECTION_POOL}"
+        },
+        {
+          "path": "${GRID}/k20_d8_r{{replicate}}/precision/plateau_summary.json",
+          "field": "validation.common_pool_sha256",
+          "equals": "d39779ad4bc0dc7bd4381486b198124a563d9a798bfe425a60775e87a1ef7ee9"
+        }
+      ],
+      "scientific": {
+        "initialization": "direct-complete-q121-common-origin",
+        "parameter_scope": "cores-only",
+        "optimizer_path": "complex64-standard-primary-precision",
+        "factors": {
+          "k": 20,
+          "D": 8,
+          "trainable_real_parameter_count": 282656
+        }
+      }
+    },
+    {
+      "id": "capacity-precision-k24-d8-r{{replicate}}",
+      "phase": "capacity-grid",
+      "matrix": {
+        "replicate": [
+          1,
+          2,
+          3
+        ]
+      },
+      "needs": [
+        "capacity-primary-k24-d8-r{{replicate}}"
+      ],
+      "resources": {
+        "gpu": true
+      },
+      "command": [
+        "${PYTHON}",
+        "scripts/run_gcicy_tn_plateau_stage.py",
+        "--initial-model",
+        "${GRID}/k24_d8_r{{replicate}}/primary/plateau_model.pt",
+        "--stage-dir",
+        "${GRID}/k24_d8_r{{replicate}}/precision",
+        "--max-rounds",
+        "5",
+        "--first-kappa-source",
+        "saved_model",
+        "--continuation-kappa-source",
+        "saved_model",
+        "--",
+        "--adapter",
+        "p5p1_type21_k3_1223",
+        "--model-seed",
+        "20260802",
+        "--sampling-cluster-size",
+        "6",
+        "--source-artifact",
+        "${SOURCE}",
+        "--site-count",
+        "24",
+        "--bond-dimension",
+        "8",
+        "--positive-floor",
+        "1e-14",
+        "--initialization-noise",
+        "0",
+        "--train-points",
+        "196608",
+        "--train-seed",
+        "86201",
+        "--train-common-pool",
+        "${TRAIN_POOL}",
+        "--validation-points",
+        "24576",
+        "--validation-seed",
+        "86202",
+        "--validation-common-pool",
+        "${SELECTION_POOL}",
+        "--workers",
+        "1",
+        "--epochs",
+        "120",
+        "--batch-size",
+        "1024",
+        "--learning-rate",
+        "3e-5",
+        "--gradient-clip-norm",
+        "2",
+        "--potential-loss-weight",
+        "0",
+        "--metric-loss-weight",
+        "0",
+        "--log-energy-loss-weight",
+        "1",
+        "--ma-loss-weight",
+        "1",
+        "--tail-loss-weight",
+        "0.1",
+        "--tail-fraction",
+        "0.02",
+        "--tail-ratio-threshold",
+        "1.5",
+        "--tail-smooth-temperature",
+        "0.05",
+        "--eval-every",
+        "1",
+        "--early-stopping-patience",
+        "8",
+        "--early-stopping-min-relative-improvement",
+        "0.003",
+        "--torch-seed",
+        "866000{{replicate}}",
+        "--device",
+        "cuda",
+        "--precision",
+        "complex64"
+      ],
+      "expected_outputs": [
+        "${GRID}/k24_d8_r{{replicate}}/precision/plateau_model.pt",
+        "${GRID}/k24_d8_r{{replicate}}/precision/plateau_summary.json",
+        "${GRID}/k24_d8_r{{replicate}}/precision/stage_summary.json"
+      ],
+      "json_gates": [
+        {
+          "path": "${GRID}/k24_d8_r{{replicate}}/precision/stage_summary.json",
+          "field": "status",
+          "equals": "validation_plateau"
+        },
+        {
+          "path": "${GRID}/k24_d8_r{{replicate}}/precision/plateau_summary.json",
+          "field": "precision",
+          "equals": "complex64"
+        },
+        {
+          "path": "${GRID}/k24_d8_r{{replicate}}/precision/plateau_summary.json",
+          "field": "physical_dictionary_rank",
+          "equals": 121
+        },
+        {
+          "path": "${GRID}/k24_d8_r{{replicate}}/precision/plateau_summary.json",
+          "field": "trainable_physical_dictionary",
+          "equals": false
+        },
+        {
+          "path": "${GRID}/k24_d8_r{{replicate}}/precision/plateau_summary.json",
+          "field": "best_validation.minimum_metric_eigenvalue",
+          "gt": 0
+        },
+        {
+          "path": "${GRID}/k24_d8_r{{replicate}}/precision/plateau_summary.json",
+          "field": "site_count",
+          "equals": 24
+        },
+        {
+          "path": "${GRID}/k24_d8_r{{replicate}}/precision/plateau_summary.json",
+          "field": "bond_dimension",
+          "equals": 8
+        },
+        {
+          "path": "${GRID}/k24_d8_r{{replicate}}/precision/plateau_summary.json",
+          "field": "trainable_real_parameter_count",
+          "equals": 344608
+        },
+        {
+          "path": "${GRID}/k24_d8_r{{replicate}}/precision/plateau_summary.json",
+          "field": "positive_floor",
+          "equals": 1e-14
+        },
+        {
+          "path": "${GRID}/k24_d8_r{{replicate}}/precision/plateau_summary.json",
+          "field": "physical_dictionary_gauge",
+          "equals": "fixed"
+        },
+        {
+          "path": "${GRID}/k24_d8_r{{replicate}}/precision/plateau_summary.json",
+          "field": "train.common_pool",
+          "equals": "${TRAIN_POOL}"
+        },
+        {
+          "path": "${GRID}/k24_d8_r{{replicate}}/precision/plateau_summary.json",
+          "field": "train.common_pool_sha256",
+          "equals": "050092ddc3f0847cde4b730ddd33c4e7faa6cbaffbfdafd147b171a5f191cf94"
+        },
+        {
+          "path": "${GRID}/k24_d8_r{{replicate}}/precision/plateau_summary.json",
+          "field": "validation.common_pool",
+          "equals": "${SELECTION_POOL}"
+        },
+        {
+          "path": "${GRID}/k24_d8_r{{replicate}}/precision/plateau_summary.json",
+          "field": "validation.common_pool_sha256",
+          "equals": "d39779ad4bc0dc7bd4381486b198124a563d9a798bfe425a60775e87a1ef7ee9"
+        }
+      ],
+      "scientific": {
+        "initialization": "direct-complete-q121-common-origin",
+        "parameter_scope": "cores-only",
+        "optimizer_path": "complex64-standard-primary-precision",
+        "factors": {
+          "k": 24,
+          "D": 8,
+          "trainable_real_parameter_count": 344608
+        }
+      }
+    },
+    {
+      "id": "capacity-precision-k20-d14-r{{replicate}}",
+      "phase": "capacity-grid",
+      "matrix": {
+        "replicate": [
+          1,
+          2,
+          3
+        ]
+      },
+      "needs": [
+        "capacity-primary-k20-d14-r{{replicate}}"
+      ],
+      "resources": {
+        "gpu": true
+      },
+      "command": [
+        "${PYTHON}",
+        "scripts/run_gcicy_tn_plateau_stage.py",
+        "--initial-model",
+        "${GRID}/k20_d14_r{{replicate}}/primary/plateau_model.pt",
+        "--stage-dir",
+        "${GRID}/k20_d14_r{{replicate}}/precision",
+        "--max-rounds",
+        "5",
+        "--first-kappa-source",
+        "saved_model",
+        "--continuation-kappa-source",
+        "saved_model",
+        "--",
+        "--adapter",
+        "p5p1_type21_k3_1223",
+        "--model-seed",
+        "20260802",
+        "--sampling-cluster-size",
+        "6",
+        "--source-artifact",
+        "${SOURCE}",
+        "--site-count",
+        "20",
+        "--bond-dimension",
+        "14",
+        "--positive-floor",
+        "1e-14",
+        "--initialization-noise",
+        "0",
+        "--train-points",
+        "196608",
+        "--train-seed",
+        "86201",
+        "--train-common-pool",
+        "${TRAIN_POOL}",
+        "--validation-points",
+        "24576",
+        "--validation-seed",
+        "86202",
+        "--validation-common-pool",
+        "${SELECTION_POOL}",
+        "--workers",
+        "1",
+        "--epochs",
+        "120",
+        "--batch-size",
+        "1024",
+        "--learning-rate",
+        "3e-5",
+        "--gradient-clip-norm",
+        "2",
+        "--potential-loss-weight",
+        "0",
+        "--metric-loss-weight",
+        "0",
+        "--log-energy-loss-weight",
+        "1",
+        "--ma-loss-weight",
+        "1",
+        "--tail-loss-weight",
+        "0.1",
+        "--tail-fraction",
+        "0.02",
+        "--tail-ratio-threshold",
+        "1.5",
+        "--tail-smooth-temperature",
+        "0.05",
+        "--eval-every",
+        "1",
+        "--early-stopping-patience",
+        "8",
+        "--early-stopping-min-relative-improvement",
+        "0.003",
+        "--torch-seed",
+        "866000{{replicate}}",
+        "--device",
+        "cuda",
+        "--precision",
+        "complex64"
+      ],
+      "expected_outputs": [
+        "${GRID}/k20_d14_r{{replicate}}/precision/plateau_model.pt",
+        "${GRID}/k20_d14_r{{replicate}}/precision/plateau_summary.json",
+        "${GRID}/k20_d14_r{{replicate}}/precision/stage_summary.json"
+      ],
+      "json_gates": [
+        {
+          "path": "${GRID}/k20_d14_r{{replicate}}/precision/stage_summary.json",
+          "field": "status",
+          "equals": "validation_plateau"
+        },
+        {
+          "path": "${GRID}/k20_d14_r{{replicate}}/precision/plateau_summary.json",
+          "field": "precision",
+          "equals": "complex64"
+        },
+        {
+          "path": "${GRID}/k20_d14_r{{replicate}}/precision/plateau_summary.json",
+          "field": "physical_dictionary_rank",
+          "equals": 121
+        },
+        {
+          "path": "${GRID}/k20_d14_r{{replicate}}/precision/plateau_summary.json",
+          "field": "trainable_physical_dictionary",
+          "equals": false
+        },
+        {
+          "path": "${GRID}/k20_d14_r{{replicate}}/precision/plateau_summary.json",
+          "field": "best_validation.minimum_metric_eigenvalue",
+          "gt": 0
+        },
+        {
+          "path": "${GRID}/k20_d14_r{{replicate}}/precision/plateau_summary.json",
+          "field": "site_count",
+          "equals": 20
+        },
+        {
+          "path": "${GRID}/k20_d14_r{{replicate}}/precision/plateau_summary.json",
+          "field": "bond_dimension",
+          "equals": 14
+        },
+        {
+          "path": "${GRID}/k20_d14_r{{replicate}}/precision/plateau_summary.json",
+          "field": "trainable_real_parameter_count",
+          "equals": 860552
+        },
+        {
+          "path": "${GRID}/k20_d14_r{{replicate}}/precision/plateau_summary.json",
+          "field": "positive_floor",
+          "equals": 1e-14
+        },
+        {
+          "path": "${GRID}/k20_d14_r{{replicate}}/precision/plateau_summary.json",
+          "field": "physical_dictionary_gauge",
+          "equals": "fixed"
+        },
+        {
+          "path": "${GRID}/k20_d14_r{{replicate}}/precision/plateau_summary.json",
+          "field": "train.common_pool",
+          "equals": "${TRAIN_POOL}"
+        },
+        {
+          "path": "${GRID}/k20_d14_r{{replicate}}/precision/plateau_summary.json",
+          "field": "train.common_pool_sha256",
+          "equals": "050092ddc3f0847cde4b730ddd33c4e7faa6cbaffbfdafd147b171a5f191cf94"
+        },
+        {
+          "path": "${GRID}/k20_d14_r{{replicate}}/precision/plateau_summary.json",
+          "field": "validation.common_pool",
+          "equals": "${SELECTION_POOL}"
+        },
+        {
+          "path": "${GRID}/k20_d14_r{{replicate}}/precision/plateau_summary.json",
+          "field": "validation.common_pool_sha256",
+          "equals": "d39779ad4bc0dc7bd4381486b198124a563d9a798bfe425a60775e87a1ef7ee9"
+        }
+      ],
+      "scientific": {
+        "initialization": "direct-complete-q121-common-origin",
+        "parameter_scope": "cores-only",
+        "optimizer_path": "complex64-standard-primary-precision",
+        "factors": {
+          "k": 20,
+          "D": 14,
+          "trainable_real_parameter_count": 860552
+        }
+      }
+    },
+    {
+      "id": "capacity-precision-k24-d14-r{{replicate}}",
+      "phase": "capacity-grid",
+      "matrix": {
+        "replicate": [
+          1,
+          2,
+          3
+        ]
+      },
+      "needs": [
+        "capacity-primary-k24-d14-r{{replicate}}"
+      ],
+      "resources": {
+        "gpu": true
+      },
+      "command": [
+        "${PYTHON}",
+        "scripts/run_gcicy_tn_plateau_stage.py",
+        "--initial-model",
+        "${GRID}/k24_d14_r{{replicate}}/primary/plateau_model.pt",
+        "--stage-dir",
+        "${GRID}/k24_d14_r{{replicate}}/precision",
+        "--max-rounds",
+        "5",
+        "--first-kappa-source",
+        "saved_model",
+        "--continuation-kappa-source",
+        "saved_model",
+        "--",
+        "--adapter",
+        "p5p1_type21_k3_1223",
+        "--model-seed",
+        "20260802",
+        "--sampling-cluster-size",
+        "6",
+        "--source-artifact",
+        "${SOURCE}",
+        "--site-count",
+        "24",
+        "--bond-dimension",
+        "14",
+        "--positive-floor",
+        "1e-14",
+        "--initialization-noise",
+        "0",
+        "--train-points",
+        "196608",
+        "--train-seed",
+        "86201",
+        "--train-common-pool",
+        "${TRAIN_POOL}",
+        "--validation-points",
+        "24576",
+        "--validation-seed",
+        "86202",
+        "--validation-common-pool",
+        "${SELECTION_POOL}",
+        "--workers",
+        "1",
+        "--epochs",
+        "120",
+        "--batch-size",
+        "1024",
+        "--learning-rate",
+        "3e-5",
+        "--gradient-clip-norm",
+        "2",
+        "--potential-loss-weight",
+        "0",
+        "--metric-loss-weight",
+        "0",
+        "--log-energy-loss-weight",
+        "1",
+        "--ma-loss-weight",
+        "1",
+        "--tail-loss-weight",
+        "0.1",
+        "--tail-fraction",
+        "0.02",
+        "--tail-ratio-threshold",
+        "1.5",
+        "--tail-smooth-temperature",
+        "0.05",
+        "--eval-every",
+        "1",
+        "--early-stopping-patience",
+        "8",
+        "--early-stopping-min-relative-improvement",
+        "0.003",
+        "--torch-seed",
+        "866000{{replicate}}",
+        "--device",
+        "cuda",
+        "--precision",
+        "complex64"
+      ],
+      "expected_outputs": [
+        "${GRID}/k24_d14_r{{replicate}}/precision/plateau_model.pt",
+        "${GRID}/k24_d14_r{{replicate}}/precision/plateau_summary.json",
+        "${GRID}/k24_d14_r{{replicate}}/precision/stage_summary.json"
+      ],
+      "json_gates": [
+        {
+          "path": "${GRID}/k24_d14_r{{replicate}}/precision/stage_summary.json",
+          "field": "status",
+          "equals": "validation_plateau"
+        },
+        {
+          "path": "${GRID}/k24_d14_r{{replicate}}/precision/plateau_summary.json",
+          "field": "precision",
+          "equals": "complex64"
+        },
+        {
+          "path": "${GRID}/k24_d14_r{{replicate}}/precision/plateau_summary.json",
+          "field": "physical_dictionary_rank",
+          "equals": 121
+        },
+        {
+          "path": "${GRID}/k24_d14_r{{replicate}}/precision/plateau_summary.json",
+          "field": "trainable_physical_dictionary",
+          "equals": false
+        },
+        {
+          "path": "${GRID}/k24_d14_r{{replicate}}/precision/plateau_summary.json",
+          "field": "best_validation.minimum_metric_eigenvalue",
+          "gt": 0
+        },
+        {
+          "path": "${GRID}/k24_d14_r{{replicate}}/precision/plateau_summary.json",
+          "field": "site_count",
+          "equals": 24
+        },
+        {
+          "path": "${GRID}/k24_d14_r{{replicate}}/precision/plateau_summary.json",
+          "field": "bond_dimension",
+          "equals": 14
+        },
+        {
+          "path": "${GRID}/k24_d14_r{{replicate}}/precision/plateau_summary.json",
+          "field": "trainable_real_parameter_count",
+          "equals": 1050280
+        },
+        {
+          "path": "${GRID}/k24_d14_r{{replicate}}/precision/plateau_summary.json",
+          "field": "positive_floor",
+          "equals": 1e-14
+        },
+        {
+          "path": "${GRID}/k24_d14_r{{replicate}}/precision/plateau_summary.json",
+          "field": "physical_dictionary_gauge",
+          "equals": "fixed"
+        },
+        {
+          "path": "${GRID}/k24_d14_r{{replicate}}/precision/plateau_summary.json",
+          "field": "train.common_pool",
+          "equals": "${TRAIN_POOL}"
+        },
+        {
+          "path": "${GRID}/k24_d14_r{{replicate}}/precision/plateau_summary.json",
+          "field": "train.common_pool_sha256",
+          "equals": "050092ddc3f0847cde4b730ddd33c4e7faa6cbaffbfdafd147b171a5f191cf94"
+        },
+        {
+          "path": "${GRID}/k24_d14_r{{replicate}}/precision/plateau_summary.json",
+          "field": "validation.common_pool",
+          "equals": "${SELECTION_POOL}"
+        },
+        {
+          "path": "${GRID}/k24_d14_r{{replicate}}/precision/plateau_summary.json",
+          "field": "validation.common_pool_sha256",
+          "equals": "d39779ad4bc0dc7bd4381486b198124a563d9a798bfe425a60775e87a1ef7ee9"
+        }
+      ],
+      "scientific": {
+        "initialization": "direct-complete-q121-common-origin",
+        "parameter_scope": "cores-only",
+        "optimizer_path": "complex64-standard-primary-precision",
+        "factors": {
+          "k": 24,
+          "D": 14,
+          "trainable_real_parameter_count": 1050280
+        }
+      }
+    },
+    {
+      "id": "replay-cast-k{{k}}-d{{D}}-r{{replicate}}",
+      "phase": "precision-replay",
+      "matrix": {"k": [20, 24], "D": [8, 14], "replicate": [1, 2, 3]},
+      "needs": ["capacity-precision-k{{k}}-d{{D}}-r{{replicate}}"],
+      "command": [
+        "${PYTHON}", "scripts/cast_positive_tensor_network_precision.py",
+        "--model", "${GRID}/k{{k}}_d{{D}}_r{{replicate}}/precision/plateau_model.pt",
+        "--precision", "complex128",
+        "--out", "${REPLAY}/k{{k}}_d{{D}}_r{{replicate}}/model_c128.pt",
+        "--summary", "${REPLAY}/k{{k}}_d{{D}}_r{{replicate}}/cast_summary.json"
+      ],
+      "expected_outputs": [
+        "${REPLAY}/k{{k}}_d{{D}}_r{{replicate}}/model_c128.pt",
+        "${REPLAY}/k{{k}}_d{{D}}_r{{replicate}}/cast_summary.json"
+      ],
+      "json_gates": [
+        {"path": "${REPLAY}/k{{k}}_d{{D}}_r{{replicate}}/cast_summary.json", "field": "source_precision", "equals": "complex64"},
+        {"path": "${REPLAY}/k{{k}}_d{{D}}_r{{replicate}}/cast_summary.json", "field": "target_precision", "equals": "complex128"},
+        {"path": "${REPLAY}/k{{k}}_d{{D}}_r{{replicate}}/cast_summary.json", "field": "optimizer_updates", "equals": 0},
+        {"path": "${REPLAY}/k{{k}}_d{{D}}_r{{replicate}}/cast_summary.json", "field": "exact_binary_promotion", "equals": true},
+        {"path": "${REPLAY}/k{{k}}_d{{D}}_r{{replicate}}/cast_summary.json", "field": "maximum_source_dtype_roundtrip_difference", "equals": 0}
+      ],
+      "scientific": {"role": "hash-bound zero-update exact binary promotion for development evaluation"}
+    },
+    {
+      "id": "replay-audit-k{{k}}-d{{D}}-r{{replicate}}",
+      "phase": "precision-replay",
+      "matrix": {"k": [20, 24], "D": [8, 14], "replicate": [1, 2, 3]},
+      "needs": ["replay-cast-k{{k}}-d{{D}}-r{{replicate}}"],
+      "resources": {"gpu": true},
+      "command": [
+        "${PYTHON}", "scripts/audit_type11_positive_tensor_network.py",
+        "--model", "${REPLAY}/k{{k}}_d{{D}}_r{{replicate}}/model_c128.pt",
+        "--adapter", "p5p1_type21_k3_1223",
+        "--source-artifact", "${SOURCE}",
+        "--model-seed", "20260802",
+        "--seed", "86203",
+        "--points", "49152",
+        "--common-pool", "${DEVELOPMENT_POOL}",
+        "--common-pool-split", "confirmation",
+        "--sampling-cluster-size", "6",
+        "--workers", "1",
+        "--device", "cuda",
+        "--arrays-out", "${REPLAY}/k{{k}}_d{{D}}_r{{replicate}}/arrays.npz",
+        "--out", "${REPLAY}/k{{k}}_d{{D}}_r{{replicate}}/audit.json"
+      ],
+      "expected_outputs": [
+        "${REPLAY}/k{{k}}_d{{D}}_r{{replicate}}/arrays.npz",
+        "${REPLAY}/k{{k}}_d{{D}}_r{{replicate}}/audit.json"
+      ],
+      "json_gates": [
+        {"path": "${REPLAY}/k{{k}}_d{{D}}_r{{replicate}}/audit.json", "field": "precision", "equals": "complex128"},
+        {"path": "${REPLAY}/k{{k}}_d{{D}}_r{{replicate}}/audit.json", "field": "physical_dictionary_rank", "equals": 121},
+        {"path": "${REPLAY}/k{{k}}_d{{D}}_r{{replicate}}/audit.json", "field": "metrics.minimum_metric_eigenvalue", "gt": 0}
+      ],
+      "scientific": {"evaluation_split": "development-confirmation", "optimizer_updates_after_cast": 0}
+    },
+    {
+      "id": "endpoint-k20-d8-r{{replicate}}",
+      "phase": "precision-replay",
+      "matrix": {"replicate": [1, 2, 3]},
+      "needs": ["replay-audit-k20-d8-r{{replicate}}"],
+      "command": [
+        "${PYTHON}", "scripts/evaluate_gcicy_metric_tail_arrays.py",
+        "--arrays", "${REPLAY}/k20_d8_r{{replicate}}/arrays.npz",
+        "--label", "k20-d8-r{{replicate}}",
+        "--out", "${REPLAY}/k20_d8_r{{replicate}}/tails.json"
+      ],
+      "expected_outputs": ["${REPLAY}/k20_d8_r{{replicate}}/tails.json"],
+      "json_gates": [
+        {"path": "${REPLAY}/k20_d8_r{{replicate}}/tails.json", "field": "models.k20-d8-r{{replicate}}.metrics.minimum_metric_eigenvalue", "gt": 0},
+        {"path": "${REPLAY}/k20_d8_r{{replicate}}/tails.json", "field": "models.k20-d8-r{{replicate}}.metrics.nonpositive_metric_count", "equals": 0}
+      ],
+      "scientific": {"factors": {"k": 20, "D": 8, "trainable_real_parameter_count": 282656, "training_precision": "complex64", "evaluation_precision": "complex128", "parameter_scope": "cores-only", "comparison_family": "architecture-capacity-2x2", "evaluation_split": "development-confirmation"}},
+      "result": {
+        "path": "${REPLAY}/k20_d8_r{{replicate}}/tails.json",
+        "fields": {
+          "sigma": "models.k20-d8-r{{replicate}}.metrics.sigma",
+          "chi": "models.k20-d8-r{{replicate}}.metrics.chi",
+          "absolute_log_ratio_q999": "models.k20-d8-r{{replicate}}.metrics.absolute_log_ratio_q999",
+          "absolute_log_ratio_cvar_1pct": "models.k20-d8-r{{replicate}}.metrics.absolute_log_ratio_cvar_1pct",
+          "minimum_metric_eigenvalue": "models.k20-d8-r{{replicate}}.metrics.minimum_metric_eigenvalue",
+          "nonpositive_metric_count": "models.k20-d8-r{{replicate}}.metrics.nonpositive_metric_count"
+        }
+      }
+    },
+    {
+      "id": "endpoint-k24-d8-r{{replicate}}",
+      "phase": "precision-replay",
+      "matrix": {"replicate": [1, 2, 3]},
+      "needs": ["replay-audit-k24-d8-r{{replicate}}"],
+      "command": [
+        "${PYTHON}", "scripts/evaluate_gcicy_metric_tail_arrays.py",
+        "--arrays", "${REPLAY}/k24_d8_r{{replicate}}/arrays.npz",
+        "--label", "k24-d8-r{{replicate}}",
+        "--out", "${REPLAY}/k24_d8_r{{replicate}}/tails.json"
+      ],
+      "expected_outputs": ["${REPLAY}/k24_d8_r{{replicate}}/tails.json"],
+      "json_gates": [
+        {"path": "${REPLAY}/k24_d8_r{{replicate}}/tails.json", "field": "models.k24-d8-r{{replicate}}.metrics.minimum_metric_eigenvalue", "gt": 0},
+        {"path": "${REPLAY}/k24_d8_r{{replicate}}/tails.json", "field": "models.k24-d8-r{{replicate}}.metrics.nonpositive_metric_count", "equals": 0}
+      ],
+      "scientific": {"factors": {"k": 24, "D": 8, "trainable_real_parameter_count": 344608, "training_precision": "complex64", "evaluation_precision": "complex128", "parameter_scope": "cores-only", "comparison_family": "architecture-capacity-2x2", "evaluation_split": "development-confirmation"}},
+      "result": {
+        "path": "${REPLAY}/k24_d8_r{{replicate}}/tails.json",
+        "fields": {
+          "sigma": "models.k24-d8-r{{replicate}}.metrics.sigma",
+          "chi": "models.k24-d8-r{{replicate}}.metrics.chi",
+          "absolute_log_ratio_q999": "models.k24-d8-r{{replicate}}.metrics.absolute_log_ratio_q999",
+          "absolute_log_ratio_cvar_1pct": "models.k24-d8-r{{replicate}}.metrics.absolute_log_ratio_cvar_1pct",
+          "minimum_metric_eigenvalue": "models.k24-d8-r{{replicate}}.metrics.minimum_metric_eigenvalue",
+          "nonpositive_metric_count": "models.k24-d8-r{{replicate}}.metrics.nonpositive_metric_count"
+        }
+      }
+    },
+    {
+      "id": "endpoint-k20-d14-r{{replicate}}",
+      "phase": "precision-replay",
+      "matrix": {"replicate": [1, 2, 3]},
+      "needs": ["replay-audit-k20-d14-r{{replicate}}"],
+      "command": [
+        "${PYTHON}", "scripts/evaluate_gcicy_metric_tail_arrays.py",
+        "--arrays", "${REPLAY}/k20_d14_r{{replicate}}/arrays.npz",
+        "--label", "k20-d14-r{{replicate}}",
+        "--out", "${REPLAY}/k20_d14_r{{replicate}}/tails.json"
+      ],
+      "expected_outputs": ["${REPLAY}/k20_d14_r{{replicate}}/tails.json"],
+      "json_gates": [
+        {"path": "${REPLAY}/k20_d14_r{{replicate}}/tails.json", "field": "models.k20-d14-r{{replicate}}.metrics.minimum_metric_eigenvalue", "gt": 0},
+        {"path": "${REPLAY}/k20_d14_r{{replicate}}/tails.json", "field": "models.k20-d14-r{{replicate}}.metrics.nonpositive_metric_count", "equals": 0}
+      ],
+      "scientific": {"factors": {"k": 20, "D": 14, "trainable_real_parameter_count": 860552, "training_precision": "complex64", "evaluation_precision": "complex128", "parameter_scope": "cores-only", "comparison_family": "architecture-capacity-2x2", "evaluation_split": "development-confirmation"}},
+      "result": {
+        "path": "${REPLAY}/k20_d14_r{{replicate}}/tails.json",
+        "fields": {
+          "sigma": "models.k20-d14-r{{replicate}}.metrics.sigma",
+          "chi": "models.k20-d14-r{{replicate}}.metrics.chi",
+          "absolute_log_ratio_q999": "models.k20-d14-r{{replicate}}.metrics.absolute_log_ratio_q999",
+          "absolute_log_ratio_cvar_1pct": "models.k20-d14-r{{replicate}}.metrics.absolute_log_ratio_cvar_1pct",
+          "minimum_metric_eigenvalue": "models.k20-d14-r{{replicate}}.metrics.minimum_metric_eigenvalue",
+          "nonpositive_metric_count": "models.k20-d14-r{{replicate}}.metrics.nonpositive_metric_count"
+        }
+      }
+    },
+    {
+      "id": "endpoint-k24-d14-r{{replicate}}",
+      "phase": "precision-replay",
+      "matrix": {"replicate": [1, 2, 3]},
+      "needs": ["replay-audit-k24-d14-r{{replicate}}"],
+      "command": [
+        "${PYTHON}", "scripts/evaluate_gcicy_metric_tail_arrays.py",
+        "--arrays", "${REPLAY}/k24_d14_r{{replicate}}/arrays.npz",
+        "--label", "k24-d14-r{{replicate}}",
+        "--out", "${REPLAY}/k24_d14_r{{replicate}}/tails.json"
+      ],
+      "expected_outputs": ["${REPLAY}/k24_d14_r{{replicate}}/tails.json"],
+      "json_gates": [
+        {"path": "${REPLAY}/k24_d14_r{{replicate}}/tails.json", "field": "models.k24-d14-r{{replicate}}.metrics.minimum_metric_eigenvalue", "gt": 0},
+        {"path": "${REPLAY}/k24_d14_r{{replicate}}/tails.json", "field": "models.k24-d14-r{{replicate}}.metrics.nonpositive_metric_count", "equals": 0}
+      ],
+      "scientific": {"factors": {"k": 24, "D": 14, "trainable_real_parameter_count": 1050280, "training_precision": "complex64", "evaluation_precision": "complex128", "parameter_scope": "cores-only", "comparison_family": "architecture-capacity-2x2", "evaluation_split": "development-confirmation"}},
+      "result": {
+        "path": "${REPLAY}/k24_d14_r{{replicate}}/tails.json",
+        "fields": {
+          "sigma": "models.k24-d14-r{{replicate}}.metrics.sigma",
+          "chi": "models.k24-d14-r{{replicate}}.metrics.chi",
+          "absolute_log_ratio_q999": "models.k24-d14-r{{replicate}}.metrics.absolute_log_ratio_q999",
+          "absolute_log_ratio_cvar_1pct": "models.k24-d14-r{{replicate}}.metrics.absolute_log_ratio_cvar_1pct",
+          "minimum_metric_eigenvalue": "models.k24-d14-r{{replicate}}.metrics.minimum_metric_eigenvalue",
+          "nonpositive_metric_count": "models.k24-d14-r{{replicate}}.metrics.nonpositive_metric_count"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,408 @@
+{
+  "schema": "gcicy-tn-gpu-workflow-v1",
+  "campaign_id": "x21-k24-d16-resource-preflight-v1",
+  "description": "Independent resource-only X21 complete-q121 k24,D16 complex64 full-batch preflight. It contains no D16 accuracy sweep and requires a hash-valid successful D14 preflight from x21-architecture-capacity-v1.",
+  "release_base": {
+    "software_version": "1.0.0",
+    "git_commit": "9f95071647aaf89bd520effeb322b16345d63157",
+    "zenodo_doi": "10.5281/zenodo.21963526",
+    "zenodo_archive_sha256": "587be3188b8d7a68837c3e073b062174a56244a57d7fbf3e8185a82059b608",
+    "arxiv_v1_source_sha256": "bbd16a674d93ccd6da91633312610f16cdfaf2414e4a29bcbb58b2f82fc9c50f",
+    "arxiv_v1_pdf_sha256": "3abdb11eac8cc10b41883b396cf6eeb163e23ccbb84e86b021764ce525c603b0"
+  },
+  "variables": {
+    "BASE_CAPACITY_RUN_ROOT": "/must/override/x21-architecture-capacity-v1-run-root",
+    "SOURCE": "${FROZEN_ROOT}/outputs/pipeline/type21_k1_energy_highstat_pointb64_20260718/k1_energy_highstat.npz",
+    "COMMON_K4": "${FROZEN_ROOT}/outputs/pipeline/type21_tensor_network_q22_degree_ladder_20260719/q22_k4_teacher_free.pt",
+    "TRAIN_POOL": "${FROZEN_ROOT}/outputs/pipeline/gcicy_tn_common_pools_20260728/X21_train_seed86201_n196608.npz",
+    "SELECTION_POOL": "${FROZEN_ROOT}/outputs/pipeline/gcicy_tn_common_pools_20260728/X21_selection_seed86202_n24576.npz",
+    "PREPARED": "${RUN_ROOT}/prepared",
+    "INITIAL": "${RUN_ROOT}/initial",
+    "PREFLIGHT": "${RUN_ROOT}/resource_preflight/k24_d16",
+    "CERTIFICATES": "${RUN_ROOT}/certificates"
+  },
+  "protected_paths": [
+    "${FROZEN_ROOT}/arxiv_submission_gcicy_tn_20260817",
+    "${FROZEN_ROOT}/artifact_release",
+    "${FROZEN_ROOT}/artifact_release_tn",
+    "${FROZEN_ROOT}/gcicy paper/generated_tn",
+    "${FROZEN_ROOT}/outputs/pipeline",
+    "${FROZEN_ROOT}/outputs/release",
+    "${BASE_CAPACITY_RUN_ROOT}"
+  ],
+  "frozen_inputs": [
+    {
+      "role": "x21_source_h1",
+      "path": "${SOURCE}",
+      "bytes": 1472147,
+      "sha256": "a3ec6af6ba33d9500c9c2a930da4565afa6c07cb081e0656aea88aa8dce2f529"
+    },
+    {
+      "role": "x21_q22_k4_common_origin",
+      "path": "${COMMON_K4}",
+      "bytes": 70238,
+      "sha256": "c344b9cbac9032fdf0807d45265665dcd62b581cf99d7c35a5a7d13518bd72ab"
+    },
+    {
+      "role": "x21_train_pool",
+      "path": "${TRAIN_POOL}",
+      "bytes": 93433803,
+      "sha256": "050092ddc3f0847cde4b730ddd33c4e7faa6cbaffbfdafd147b171a5f191cf94"
+    },
+    {
+      "role": "x21_selection_pool",
+      "path": "${SELECTION_POOL}",
+      "bytes": 11684007,
+      "sha256": "d39779ad4bc0dc7bd4381486b198124a563d9a798bfe425a60775e87a1ef7ee9"
+    }
+  ],
+  "forbidden_inputs": {
+    "policy": "No historical blind, holdout, or development-confirmation data may enter this resource-only campaign.",
+    "paths": [
+      "${FROZEN_ROOT}/outputs/pipeline/type21_q121_d12_final_blind_20260729",
+      "${FROZEN_ROOT}/outputs/pipeline/type21_d8_continuation_capacity_control_20260730/X21_capacity_holdout_seed86206_n98304.npz",
+      "${FROZEN_ROOT}/outputs/pipeline/type21_d8_continuation_capacity_control_20260730/X21_capacity_holdout_seed86207_n98304.npz",
+      "${FROZEN_ROOT}/outputs/pipeline/gcicy_tn_common_pools_20260728/X21_confirmation_seed86203_n49152.npz",
+      "${FROZEN_ROOT}/outputs/pipeline/type21_fixed_d8_degree_scaling_floor1e14_20260807/X21_scaling_final_seed86807_n196608.npz"
+    ],
+    "forbidden_report_fields": ["blind_test", "final_blind", "formal_blind", "capacity_holdout", "development_metrics"]
+  },
+  "source_guard": {
+    "release_base_commit": "9f95071647aaf89bd520effeb322b16345d63157",
+    "forbidden_branches": ["main", "master"],
+    "required_branch_prefix": "exp/",
+    "require_clean": true
+  },
+  "environment": {
+    "python": "3.12 recommended",
+    "torch": "2.7.1",
+    "cuda_required": true,
+    "training_precision": "complex64",
+    "reference_gpu": "RTX 4090 24 GiB",
+    "scope": "resource preflight only; no D16 accuracy claim"
+  },
+  "scientific_policy": {
+    "geometry": "X21 type-(2,1) P5 x P1 seed 20260802",
+    "target": {
+      "k": 24,
+      "D": 16,
+      "physical_dictionary_rank": 121,
+      "trainable_real_parameter_count": 1370688,
+      "precision": "complex64",
+      "batch_size": 1024,
+      "epochs": 1
+    },
+    "resource_limits": {
+      "maximum_allocated_bytes": 24159191040,
+      "maximum_allocated_gib": 22.5,
+      "maximum_reserved_bytes": 25232932864,
+      "maximum_reserved_gib": 23.5
+    },
+    "prerequisite": "The x21-architecture-capacity-v1 resource-preflight-k24-d14 job must have a hash-valid succeeded state, zero exit code, all gates passed, and its original 20/21.5 GiB limits satisfied.",
+    "scope_boundary": "A passing D16 resource certificate establishes feasibility only. D16 accuracy training remains prohibited until the separate base promotion decision is true and a new accuracy manifest is hash-frozen.",
+    "accuracy_jobs": 0
+  },
+  "defaults": {
+    "working_directory": "${REPO_ROOT}",
+    "environment": {
+      "PYTHONUNBUFFERED": "1",
+      "OMP_NUM_THREADS": "1",
+      "MKL_NUM_THREADS": "1",
+      "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"
+    },
+    "retry": {
+      "max_attempts": 3,
+      "signals": [4, 5, 11],
+      "log_patterns": [],
+      "backoff_seconds": 60
+    }
+  },
+  "jobs": [
+    {
+      "id": "certify-d14-prerequisite",
+      "phase": "d14-prerequisite",
+      "command": [
+        "${PYTHON}", "scripts/certify_x21_resource_preflight.py",
+        "--source-run-root", "${BASE_CAPACITY_RUN_ROOT}",
+        "--source-campaign-id", "x21-architecture-capacity-v1",
+        "--expected-manifest", "${REPO_ROOT}/experiments/manifests/x21_architecture_capacity_v1.json",
+        "--job-id", "resource-preflight-k24-d14",
+        "--source-summary", "${BASE_CAPACITY_RUN_ROOT}/resource_preflight/k24_d14/summary.json",
+        "--site-count", "24",
+        "--bond-dimension", "14",
+        "--parameter-count", "1050280",
+        "--positive-floor", "1e-14",
+        "--train-pool", "${TRAIN_POOL}",
+        "--train-pool-sha256", "050092ddc3f0847cde4b730ddd33c4e7faa6cbaffbfdafd147b171a5f191cf94",
+        "--selection-pool", "${SELECTION_POOL}",
+        "--selection-pool-sha256", "d39779ad4bc0dc7bd4381486b198124a563d9a798bfe425a60775e87a1ef7ee9",
+        "--allocated-max-bytes", "21474836480",
+        "--reserved-max-bytes", "23085449216",
+        "--out", "${CERTIFICATES}/d14_prerequisite.json"
+      ],
+      "expected_outputs": ["${CERTIFICATES}/d14_prerequisite.json"],
+      "json_gates": [
+        {"path": "${CERTIFICATES}/d14_prerequisite.json", "field": "status", "equals": "passed"},
+        {"path": "${CERTIFICATES}/d14_prerequisite.json", "field": "exit_code", "equals": 0},
+        {"path": "${CERTIFICATES}/d14_prerequisite.json", "field": "bond_dimension", "equals": 14},
+        {"path": "${CERTIFICATES}/d14_prerequisite.json", "field": "all_summary_numbers_finite", "equals": true},
+        {"path": "${CERTIFICATES}/d14_prerequisite.json", "field": "strictly_positive_validation_metric", "equals": true}
+      ],
+      "retry": {"max_attempts": 1},
+      "scientific": {"role": "hash-bound cross-campaign D14 resource prerequisite", "accuracy_job": false}
+    },
+    {
+      "id": "prepare-q121-k4",
+      "phase": "prepare",
+      "needs": ["certify-d14-prerequisite"],
+      "command": [
+        "${PYTHON}", "scripts/complete_positive_tensor_network_dictionary.py",
+        "--model", "${COMMON_K4}",
+        "--out", "${PREPARED}/q121_k4_completed.pt",
+        "--summary", "${PREPARED}/q121_k4_completed_summary.json"
+      ],
+      "expected_outputs": ["${PREPARED}/q121_k4_completed.pt", "${PREPARED}/q121_k4_completed_summary.json"]
+    },
+    {
+      "id": "prepare-floor-1e14",
+      "phase": "prepare",
+      "needs": ["prepare-q121-k4"],
+      "command": [
+        "${PYTHON}", "scripts/set_positive_tensor_network_floor.py",
+        "--model", "${PREPARED}/q121_k4_completed.pt",
+        "--positive-floor", "1e-14",
+        "--out", "${PREPARED}/q121_k4_floor1e14_c128.pt",
+        "--summary", "${PREPARED}/q121_k4_floor1e14_c128_summary.json"
+      ],
+      "expected_outputs": ["${PREPARED}/q121_k4_floor1e14_c128.pt", "${PREPARED}/q121_k4_floor1e14_c128_summary.json"],
+      "json_gates": [
+        {"path": "${PREPARED}/q121_k4_floor1e14_c128_summary.json", "field": "strictly_positive", "equals": true}
+      ]
+    },
+    {
+      "id": "prepare-complex64-origin",
+      "phase": "prepare",
+      "needs": ["prepare-floor-1e14"],
+      "command": [
+        "${PYTHON}", "scripts/cast_positive_tensor_network_precision.py",
+        "--model", "${PREPARED}/q121_k4_floor1e14_c128.pt",
+        "--precision", "complex64",
+        "--out", "${PREPARED}/q121_k4_floor1e14_c64.pt",
+        "--summary", "${PREPARED}/q121_k4_floor1e14_c64_cast.json"
+      ],
+      "expected_outputs": ["${PREPARED}/q121_k4_floor1e14_c64.pt", "${PREPARED}/q121_k4_floor1e14_c64_cast.json"],
+      "json_gates": [
+        {"path": "${PREPARED}/q121_k4_floor1e14_c64_cast.json", "field": "source_precision", "equals": "complex128"},
+        {"path": "${PREPARED}/q121_k4_floor1e14_c64_cast.json", "field": "target_precision", "equals": "complex64"},
+        {"path": "${PREPARED}/q121_k4_floor1e14_c64_cast.json", "field": "optimizer_updates", "equals": 0}
+      ]
+    },
+    {
+      "id": "initial-sites-k24",
+      "phase": "initialize-d16",
+      "needs": ["prepare-complex64-origin"],
+      "command": [
+        "${PYTHON}", "scripts/resize_positive_tensor_network_sites.py",
+        "--model", "${PREPARED}/q121_k4_floor1e14_c64.pt",
+        "--target-site-count", "24",
+        "--transfer-rule", "repeat",
+        "--bridge-one-sided-activation-scale", "0.03",
+        "--bridge-noise-seed", "8630001",
+        "--out", "${INITIAL}/k24/sites.pt",
+        "--summary", "${INITIAL}/k24/sites_summary.json"
+      ],
+      "expected_outputs": ["${INITIAL}/k24/sites.pt", "${INITIAL}/k24/sites_summary.json"]
+    },
+    {
+      "id": "initial-bond-k24-d16",
+      "phase": "initialize-d16",
+      "needs": ["initial-sites-k24"],
+      "command": [
+        "${PYTHON}", "scripts/expand_positive_tensor_network_bond.py",
+        "--model", "${INITIAL}/k24/sites.pt",
+        "--bond-dimension", "16",
+        "--initialization-noise", "0",
+        "--one-sided-activation-scale", "0.03",
+        "--seed", "8640001",
+        "--precision", "preserve",
+        "--out", "${INITIAL}/k24_d16/raw/model.pt",
+        "--summary", "${INITIAL}/k24_d16/raw/summary.json"
+      ],
+      "expected_outputs": ["${INITIAL}/k24_d16/raw/model.pt", "${INITIAL}/k24_d16/raw/summary.json"],
+      "json_gates": [
+        {"path": "${INITIAL}/k24_d16/raw/summary.json", "field": "precision", "equals": "complex64"},
+        {"path": "${INITIAL}/k24_d16/raw/summary.json", "field": "function_preserving_by_construction", "equals": true},
+        {"path": "${INITIAL}/k24_d16/raw/summary.json", "field": "new_channels_have_first_order_activation", "equals": true}
+      ]
+    },
+    {
+      "id": "initial-canonical-k24-d16",
+      "phase": "initialize-d16",
+      "needs": ["initial-bond-k24-d16"],
+      "command": [
+        "${PYTHON}", "scripts/canonicalize_positive_tensor_network_artifact.py",
+        "--model", "${INITIAL}/k24_d16/raw/model.pt",
+        "--center", "12",
+        "--out", "${INITIAL}/k24_d16/canonical/model.pt",
+        "--summary", "${INITIAL}/k24_d16/canonical/summary.json"
+      ],
+      "expected_outputs": ["${INITIAL}/k24_d16/canonical/model.pt", "${INITIAL}/k24_d16/canonical/summary.json"],
+      "json_gates": [
+        {"path": "${INITIAL}/k24_d16/canonical/summary.json", "field": "site_count", "equals": 24},
+        {"path": "${INITIAL}/k24_d16/canonical/summary.json", "field": "bond_dimension", "equals": 16},
+        {"path": "${INITIAL}/k24_d16/canonical/summary.json", "field": "center", "equals": 12},
+        {"path": "${INITIAL}/k24_d16/canonical/summary.json", "field": "trainable_real_parameter_count", "equals": 1370688}
+      ]
+    },
+    {
+      "id": "initial-equivalence-k24-d16",
+      "phase": "initialize-d16",
+      "needs": ["initial-canonical-k24-d16"],
+      "resources": {"gpu": true},
+      "command": [
+        "${PYTHON}", "scripts/audit_positive_tensor_network_equivalence.py",
+        "--adapter", "p5p1_type21_k3_1223",
+        "--model-a", "${PREPARED}/q121_k4_floor1e14_c64.pt",
+        "--model-b", "${INITIAL}/k24_d16/canonical/model.pt",
+        "--source-artifact", "${SOURCE}",
+        "--model-seed", "20260802",
+        "--sampling-cluster-size", "6",
+        "--seed", "8650001",
+        "--points", "8190",
+        "--workers", "1",
+        "--chunk-size", "546",
+        "--absolute-tolerance", "1e-5",
+        "--relative-metric-tolerance", "1e-4",
+        "--allow-different-site-counts",
+        "--device", "cuda",
+        "--out", "${INITIAL}/k24_d16/canonical/equivalence.json"
+      ],
+      "expected_outputs": ["${INITIAL}/k24_d16/canonical/equivalence.json"],
+      "json_gates": [
+        {"path": "${INITIAL}/k24_d16/canonical/equivalence.json", "field": "success", "equals": true}
+      ],
+      "scientific": {"role": "epoch-zero function/metric equivalence only; not an accuracy endpoint", "accuracy_job": false}
+    },
+    {
+      "id": "resource-preflight-k24-d16",
+      "phase": "resource-preflight-d16",
+      "needs": ["initial-equivalence-k24-d16"],
+      "resources": {"gpu": true},
+      "command": [
+        "${PYTHON}", "scripts/train_type11_positive_tensor_network.py",
+        "--adapter", "p5p1_type21_k3_1223",
+        "--model-seed", "20260802",
+        "--sampling-cluster-size", "6",
+        "--source-artifact", "${SOURCE}",
+        "--site-count", "24",
+        "--initial-model", "${INITIAL}/k24_d16/canonical/model.pt",
+        "--bond-dimension", "16",
+        "--kappa-source", "initial_model",
+        "--positive-floor", "1e-14",
+        "--initialization-noise", "0",
+        "--train-points", "196608",
+        "--train-seed", "86201",
+        "--train-common-pool", "${TRAIN_POOL}",
+        "--validation-points", "24576",
+        "--validation-seed", "86202",
+        "--validation-common-pool", "${SELECTION_POOL}",
+        "--workers", "1",
+        "--epochs", "1",
+        "--batch-size", "1024",
+        "--learning-rate", "2e-4",
+        "--gradient-clip-norm", "2",
+        "--potential-loss-weight", "0",
+        "--metric-loss-weight", "0",
+        "--log-energy-loss-weight", "1",
+        "--ma-loss-weight", "1",
+        "--tail-loss-weight", "0.1",
+        "--tail-fraction", "0.02",
+        "--tail-ratio-threshold", "1.5",
+        "--tail-smooth-temperature", "0.05",
+        "--torch-seed", "20268016",
+        "--device", "cuda",
+        "--precision", "complex64",
+        "--checkpoint", "${PREFLIGHT}/checkpoint.pt",
+        "--out", "${PREFLIGHT}/model.pt",
+        "--summary", "${PREFLIGHT}/summary.json"
+      ],
+      "expected_outputs": ["${PREFLIGHT}/checkpoint.pt", "${PREFLIGHT}/model.pt", "${PREFLIGHT}/summary.json"],
+      "json_gates": [
+        {"path": "${PREFLIGHT}/summary.json", "field": "termination_reason", "equals": "completed_requested_epochs"},
+        {"path": "${PREFLIGHT}/summary.json", "field": "site_count", "equals": 24},
+        {"path": "${PREFLIGHT}/summary.json", "field": "bond_dimension", "equals": 16},
+        {"path": "${PREFLIGHT}/summary.json", "field": "precision", "equals": "complex64"},
+        {"path": "${PREFLIGHT}/summary.json", "field": "physical_dictionary_rank", "equals": 121},
+        {"path": "${PREFLIGHT}/summary.json", "field": "trainable_physical_dictionary", "equals": false},
+        {"path": "${PREFLIGHT}/summary.json", "field": "physical_dictionary_gauge", "equals": "fixed"},
+        {"path": "${PREFLIGHT}/summary.json", "field": "trainable_real_parameter_count", "equals": 1370688},
+        {"path": "${PREFLIGHT}/summary.json", "field": "positive_floor", "equals": 1e-14},
+        {"path": "${PREFLIGHT}/summary.json", "field": "train.common_pool", "equals": "${TRAIN_POOL}"},
+        {"path": "${PREFLIGHT}/summary.json", "field": "train.common_pool_sha256", "equals": "050092ddc3f0847cde4b730ddd33c4e7faa6cbaffbfdafd147b171a5f191cf94"},
+        {"path": "${PREFLIGHT}/summary.json", "field": "validation.common_pool", "equals": "${SELECTION_POOL}"},
+        {"path": "${PREFLIGHT}/summary.json", "field": "validation.common_pool_sha256", "equals": "d39779ad4bc0dc7bd4381486b198124a563d9a798bfe425a60775e87a1ef7ee9"},
+        {"path": "${PREFLIGHT}/summary.json", "field": "best_validation.minimum_metric_eigenvalue", "gt": 0},
+        {"path": "${PREFLIGHT}/summary.json", "field": "runtime_seconds", "gt": 0},
+        {"path": "${PREFLIGHT}/summary.json", "field": "device_memory.maximum_allocated_bytes", "gt": 0},
+        {"path": "${PREFLIGHT}/summary.json", "field": "device_memory.maximum_allocated_bytes", "le": 24159191040},
+        {"path": "${PREFLIGHT}/summary.json", "field": "device_memory.maximum_reserved_bytes", "le": 25232932864}
+      ],
+      "resume": {"checkpoint": "${PREFLIGHT}/checkpoint.pt", "flag": "--resume-checkpoint"},
+      "scientific": {
+        "role": "full-pool one-epoch k24,D16 forward/backward/Adam/validation/checkpoint resource preflight",
+        "accuracy_job": false,
+        "batch_fallback": "forbidden; an OOM is a failed resource preflight"
+      }
+    },
+    {
+      "id": "certify-d16-resource-preflight",
+      "phase": "resource-certification",
+      "needs": ["resource-preflight-k24-d16"],
+      "command": [
+        "${PYTHON}", "scripts/certify_x21_resource_preflight.py",
+        "--source-run-root", "${RUN_ROOT}",
+        "--source-campaign-id", "x21-k24-d16-resource-preflight-v1",
+        "--expected-manifest", "${REPO_ROOT}/experiments/manifests/x21_k24_d16_resource_preflight_v1.json",
+        "--job-id", "resource-preflight-k24-d16",
+        "--source-summary", "${PREFLIGHT}/summary.json",
+        "--site-count", "24",
+        "--bond-dimension", "16",
+        "--parameter-count", "1370688",
+        "--positive-floor", "1e-14",
+        "--train-pool", "${TRAIN_POOL}",
+        "--train-pool-sha256", "050092ddc3f0847cde4b730ddd33c4e7faa6cbaffbfdafd147b171a5f191cf94",
+        "--selection-pool", "${SELECTION_POOL}",
+        "--selection-pool-sha256", "d39779ad4bc0dc7bd4381486b198124a563d9a798bfe425a60775e87a1ef7ee9",
+        "--allocated-max-bytes", "24159191040",
+        "--reserved-max-bytes", "25232932864",
+        "--out", "${CERTIFICATES}/d16_resource_preflight.json"
+      ],
+      "expected_outputs": ["${CERTIFICATES}/d16_resource_preflight.json"],
+      "json_gates": [
+        {"path": "${CERTIFICATES}/d16_resource_preflight.json", "field": "status", "equals": "passed"},
+        {"path": "${CERTIFICATES}/d16_resource_preflight.json", "field": "exit_code", "equals": 0},
+        {"path": "${CERTIFICATES}/d16_resource_preflight.json", "field": "site_count", "equals": 24},
+        {"path": "${CERTIFICATES}/d16_resource_preflight.json", "field": "bond_dimension", "equals": 16},
+        {"path": "${CERTIFICATES}/d16_resource_preflight.json", "field": "trainable_real_parameter_count", "equals": 1370688},
+        {"path": "${CERTIFICATES}/d16_resource_preflight.json", "field": "all_summary_numbers_finite", "equals": true},
+        {"path": "${CERTIFICATES}/d16_resource_preflight.json", "field": "strictly_positive_validation_metric", "equals": true},
+        {"path": "${CERTIFICATES}/d16_resource_preflight.json", "field": "maximum_allocated_bytes", "le": 24159191040},
+        {"path": "${CERTIFICATES}/d16_resource_preflight.json", "field": "maximum_reserved_bytes", "le": 25232932864},
+        {"path": "${CERTIFICATES}/d16_resource_preflight.json", "field": "runtime_seconds", "gt": 0}
+      ],
+      "retry": {"max_attempts": 1},
+      "scientific": {"role": "terminal resource-only certificate", "accuracy_job": false},
+      "result": {
+        "path": "${CERTIFICATES}/d16_resource_preflight.json",
+        "fields": {
+          "exit_code": "exit_code",
+          "maximum_allocated_bytes": "maximum_allocated_bytes",
+          "maximum_reserved_bytes": "maximum_reserved_bytes",
+          "runtime_seconds": "runtime_seconds",
+          "minimum_metric_eigenvalue": "minimum_metric_eigenvalue",
+          "trainable_real_parameter_count": "trainable_real_parameter_count"
+        }
+      }
+    }
+  ]
+}

@@ -315,6 +315,65 @@ def _validate_output_flags(command: Sequence[str], run_root: Path) -> None:
             raise WorkflowError(f"command output flag escapes RUN_ROOT: {flag} {path}")
 
 
+def _parse_forbidden_inputs(
+    expanded_manifest: Mapping[str, Any], *, frozen_root: Path
+) -> tuple[tuple[Path, ...], tuple[str, ...]]:
+    """Normalize optional development-only data exclusions.
+
+    This is intentionally a control-plane guard rather than a filesystem
+    permission mechanism.  It prevents a registered command, gate, or result
+    extractor from naming a forbidden blind artifact while still allowing a
+    command to read an explicitly registered development file from the same
+    parent directory.
+    """
+
+    configured = expanded_manifest.get("forbidden_inputs")
+    if configured is None:
+        return (), ()
+    if not isinstance(configured, dict):
+        raise WorkflowError("forbidden_inputs must be an object")
+    path_rows = configured.get("paths", [])
+    field_rows = configured.get("forbidden_report_fields", [])
+    if not isinstance(path_rows, list) or not all(
+        isinstance(value, str) and value for value in path_rows
+    ):
+        raise WorkflowError("forbidden_inputs.paths must be a string list")
+    if not isinstance(field_rows, list) or not all(
+        isinstance(value, str) and value for value in field_rows
+    ):
+        raise WorkflowError(
+            "forbidden_inputs.forbidden_report_fields must be a string list"
+        )
+    paths = tuple(_resolve_path(value, frozen_root) for value in path_rows)
+    if len(set(paths)) != len(paths):
+        raise WorkflowError("forbidden_inputs contains duplicate paths")
+    fields = tuple(field_rows)
+    if len(set(fields)) != len(fields):
+        raise WorkflowError("forbidden_inputs contains duplicate report fields")
+    return paths, fields
+
+
+def _reject_forbidden_command_paths(
+    *, job_id: str, command: Sequence[str], forbidden_paths: Sequence[Path]
+) -> None:
+    for token in command:
+        for forbidden in forbidden_paths:
+            if str(forbidden) in token:
+                raise WorkflowError(
+                    f"job {job_id} command references forbidden input: {forbidden}"
+                )
+
+
+def _references_forbidden_report_field(
+    dotted_path: str, forbidden_fields: Sequence[str]
+) -> str | None:
+    components = dotted_path.split(".")
+    for forbidden in forbidden_fields:
+        if forbidden in components or dotted_path == forbidden:
+            return forbidden
+    return None
+
+
 def load_workflow_plan(
     manifest_path: Path,
     *,
@@ -368,6 +427,9 @@ def load_workflow_plan(
             variables[str(key)] = _expand_string(str(value), variables)
 
     expanded = expand_variables(raw, variables)
+    forbidden_paths, forbidden_report_fields = _parse_forbidden_inputs(
+        expanded, frozen_root=frozen_root
+    )
     protected_rows = expanded.get("protected_paths", [])
     if not isinstance(protected_rows, list) or not protected_rows:
         raise WorkflowError("protected_paths must be a non-empty list")
@@ -403,6 +465,11 @@ def load_workflow_plan(
                 bytes=None if row.get("bytes") is None else int(row["bytes"]),
             )
         )
+    for item in frozen_inputs:
+        if item.path in forbidden_paths:
+            raise WorkflowError(
+                f"frozen input {item.role} is also registered as forbidden: {item.path}"
+            )
 
     job_rows = expanded.get("jobs", [])
     template_rows = expanded.get("job_templates", [])
@@ -442,6 +509,11 @@ def load_workflow_plan(
         ):
             raise WorkflowError(f"job {job_id} command must be a string list")
         command_tuple = tuple(command)
+        _reject_forbidden_command_paths(
+            job_id=job_id,
+            command=command_tuple,
+            forbidden_paths=forbidden_paths,
+        )
         _validate_output_flags(command_tuple, run_root)
         needs = row.get("needs", [])
         if not isinstance(needs, list) or not all(
@@ -504,6 +576,16 @@ def load_workflow_plan(
             if not _is_within(gate_path, run_root):
                 raise WorkflowError(f"job {job_id} JSON gate escapes RUN_ROOT")
             normalized_gate["path"] = str(gate_path)
+            gate_field = gate.get("field")
+            if isinstance(gate_field, str):
+                forbidden_field = _references_forbidden_report_field(
+                    gate_field, forbidden_report_fields
+                )
+                if forbidden_field is not None:
+                    raise WorkflowError(
+                        f"job {job_id} JSON gate references forbidden report field: "
+                        f"{forbidden_field}"
+                    )
             normalized_gates.append(normalized_gate)
         scientific = row.get("scientific", {})
         result = row.get("result")
@@ -519,6 +601,22 @@ def load_workflow_plan(
             if not _is_within(result_path, run_root):
                 raise WorkflowError(f"job {job_id} result path escapes RUN_ROOT")
             result["path"] = str(result_path)
+            result_fields = result.get("fields", {})
+            if not isinstance(result_fields, dict):
+                raise WorkflowError(f"job {job_id} result fields must be an object")
+            for dotted_path in result_fields.values():
+                if not isinstance(dotted_path, str):
+                    raise WorkflowError(
+                        f"job {job_id} result field paths must be strings"
+                    )
+                forbidden_field = _references_forbidden_report_field(
+                    dotted_path, forbidden_report_fields
+                )
+                if forbidden_field is not None:
+                    raise WorkflowError(
+                        f"job {job_id} result references forbidden report field: "
+                        f"{forbidden_field}"
+                    )
         resources = row.get("resources", {})
         if not isinstance(resources, dict):
             raise WorkflowError(f"job {job_id} resources must be an object")

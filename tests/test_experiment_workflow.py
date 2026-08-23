@@ -136,6 +136,62 @@ def test_rejects_run_root_inside_source_or_frozen_tree(tmp_path):
             )
 
 
+def test_forbidden_input_paths_cannot_be_registered_in_commands(tmp_path):
+    paths = write_manifest(
+        tmp_path,
+        jobs=[
+            {
+                "id": "inspect",
+                "command": [
+                    "${PYTHON}",
+                    "-c",
+                    "pass",
+                    "${FROZEN_ROOT}/blind/private.npz",
+                ],
+                "expected_outputs": [],
+            }
+        ],
+    )
+    manifest_path = paths[0]
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["forbidden_inputs"] = {
+        "paths": ["${FROZEN_ROOT}/blind/private.npz"],
+        "forbidden_report_fields": [],
+    }
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(WorkflowError, match="command references forbidden input"):
+        load_test_plan(paths)
+
+
+@pytest.mark.parametrize("location", ["gate", "result"])
+def test_forbidden_report_fields_cannot_be_read(tmp_path, location):
+    output = "${RUN_ROOT}/report.json"
+    job = {
+        "id": "inspect",
+        "command": ["${PYTHON}", "-c", "pass"],
+        "expected_outputs": [output],
+    }
+    if location == "gate":
+        job["json_gates"] = [
+            {"path": output, "field": "metrics.blind_test.sigma", "gt": 0}
+        ]
+    else:
+        job["result"] = {
+            "path": output,
+            "fields": {"sigma": "metrics.blind_test.sigma"},
+        }
+    paths = write_manifest(tmp_path, jobs=[job])
+    manifest_path = paths[0]
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["forbidden_inputs"] = {
+        "paths": [],
+        "forbidden_report_fields": ["blind_test"],
+    }
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(WorkflowError, match="forbidden report field"):
+        load_test_plan(paths)
+
+
 def test_rejects_dependency_cycle(tmp_path):
     jobs = [
         {

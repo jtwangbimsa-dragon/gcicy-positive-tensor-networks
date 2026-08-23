@@ -16,6 +16,124 @@ old quintic blind pool as forbidden input, and studies the new `k=40,D=14`
 target.  `D=16` is resource-preflight-only until a separate extension is
 registered.
 
+The focused X21 complete-dictionary capacity experiment is registered in
+[x21_architecture_capacity_v1.json](manifests/x21_architecture_capacity_v1.json).
+It compares the full `k={20,24}` by `D={8,14}` surface with three paired seeds,
+uses complex64 for optimization, and requires a zero-update complex128 replay
+for every endpoint.  Its 109-job DAG has exactly twelve metric result rows plus
+one create-only deterministic D16 adjudication artifact.  It is independent of
+the broader 279-job X21 campaign.
+
+## Focused X21 architecture-capacity quick start
+
+Use a fresh run root.  The preflight selector includes only the preparation,
+precision-roundtrip calibration, `k=24,D=14` initialization/equivalence, and a
+full-pool one-epoch allocation test:
+
+```bash
+X21_FROZEN_ROOT="/path/to/frozen/gcicy-workspace"
+X21_CAPACITY_RUN_ROOT="/scratch/gcicy/post-v1/x21-architecture-capacity-v1"
+
+python scripts/run_gcicy_tn_gpu_workflow.py validate \
+  --manifest experiments/manifests/x21_architecture_capacity_v1.json \
+  --frozen-root "$X21_FROZEN_ROOT" \
+  --run-root "$X21_CAPACITY_RUN_ROOT" \
+  --check-cuda --gpu 0
+
+python scripts/run_gcicy_tn_gpu_workflow.py run \
+  --manifest experiments/manifests/x21_architecture_capacity_v1.json \
+  --frozen-root "$X21_FROZEN_ROOT" \
+  --run-root "$X21_CAPACITY_RUN_ROOT" \
+  --phase resource-preflight-d14 --gpu 0
+```
+
+Only after the registered parameter-count, positivity, and 20/21.5 GiB
+allocated/reserved memory gates pass should the capacity grid and precision
+replays run:
+
+```bash
+python scripts/run_gcicy_tn_gpu_workflow.py run \
+  --manifest experiments/manifests/x21_architecture_capacity_v1.json \
+  --frozen-root "$X21_FROZEN_ROOT" \
+  --run-root "$X21_CAPACITY_RUN_ROOT" \
+  --phase capacity-grid --gpu 0
+
+python scripts/run_gcicy_tn_gpu_workflow.py run \
+  --manifest experiments/manifests/x21_architecture_capacity_v1.json \
+  --frozen-root "$X21_FROZEN_ROOT" \
+  --run-root "$X21_CAPACITY_RUN_ROOT" \
+  --phase precision-replay --gpu 0
+
+python scripts/run_gcicy_tn_gpu_workflow.py run \
+  --manifest experiments/manifests/x21_architecture_capacity_v1.json \
+  --frozen-root "$X21_FROZEN_ROOT" \
+  --run-root "$X21_CAPACITY_RUN_ROOT" \
+  --phase promotion-decision --gpu 0
+```
+
+The estimand is the endpoint contrast under one uniform primary/precision
+validation-plateau stopping rule.  It is not a fixed-update pure capacity
+effect: the adjudication records and hashes the actual round, epoch, optimizer
+update, validation-evaluation, and trainer-runtime exposure for every seed.
+The q0.999 and CVaR gates use the ratio of the three-seed arithmetic means;
+paired sigma wins use strict per-seed inequality, so a tie is not a win.
+Missing, malformed, non-finite, wrong-seed, or hash-inconsistent evidence makes
+the adjudication job fail without creating a decision.  A complete negative
+promotion decision is a valid successful base-workflow outcome.
+
+`D=16` accuracy training is deliberately absent from this base DAG.  A
+separate hash-frozen accuracy extension and run root may be created only after
+all twelve complex128 rows are strictly positive and `k=24,D=14` satisfies the
+registered paired rule over `k=24,D=8`.
+
+## X21 `k=24,D=16` resource-only preflight
+
+Resource feasibility can be measured independently, before any D16 accuracy
+sweep, with
+[x21_k24_d16_resource_preflight_v1.json](manifests/x21_k24_d16_resource_preflight_v1.json).
+It requires a hash-valid successful `resource-preflight-k24-d14` state from the
+base campaign, uses a new run root, and performs exactly one full-pool
+complex64 epoch at logical batch 1024 with fixed complete q121 and
+`P=1,370,688`.
+
+```bash
+X21_D16_PREFLIGHT_RUN_ROOT="/scratch/gcicy/post-v1/x21-k24-d16-resource-preflight-v1"
+
+python scripts/run_gcicy_tn_gpu_workflow.py validate \
+  --manifest experiments/manifests/x21_k24_d16_resource_preflight_v1.json \
+  --frozen-root "$X21_FROZEN_ROOT" \
+  --run-root "$X21_D16_PREFLIGHT_RUN_ROOT" \
+  --set BASE_CAPACITY_RUN_ROOT="$X21_CAPACITY_RUN_ROOT" \
+  --check-cuda --gpu 0
+
+python scripts/run_gcicy_tn_gpu_workflow.py run \
+  --manifest experiments/manifests/x21_k24_d16_resource_preflight_v1.json \
+  --frozen-root "$X21_FROZEN_ROOT" \
+  --run-root "$X21_D16_PREFLIGHT_RUN_ROOT" \
+  --set BASE_CAPACITY_RUN_ROOT="$X21_CAPACITY_RUN_ROOT" \
+  --phase resource-certification --gpu 0
+```
+
+The terminal certificate records allocated/reserved memory, trainer runtime,
+exit code, positivity, and source hashes.  Its gates are allocated memory at
+most 22.5 GiB and reserved memory at most 23.5 GiB, with all reported numbers
+finite and the validation metric strictly positive.  OOM is a failed resource
+preflight, not permission to lower the registered batch size.  Passing this
+certificate establishes feasibility only; it does not authorize D16 accuracy
+training unless the separate base promotion decision is true.
+
+## Constrained structure Auto Research
+
+The capacity manifests above keep the chain representation fixed.  The
+independent [architecture Auto Research protocol](ARCHITECTURE_AUTO_RESEARCH_V1.md)
+searches the higher-leverage quintic structure changes instead: exact tree
+re-association, nested internal-edge/shared-leaf rank growth, and registered
+root residual ranks.  It freezes search indices, enforces matched three-seed
+controls and parameter accounting, permits only typed mutations, and closes
+after one durably claimed shadow evaluation.  The controller adjudicates
+hash-bound evidence from the existing numerical workers; it does not execute
+agent-authored shell commands or alter a trainer during a campaign.
+
 ## Quintic campaign quick start
 
 Use a new run root; do not reuse the X21 run root or any historical output

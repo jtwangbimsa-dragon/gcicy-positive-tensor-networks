@@ -19,6 +19,10 @@ TESTS = (
     "tests/test_cast_positive_tensor_network_precision.py",
     "tests/test_audit_quintic_tn_scaling_preflight.py",
     "tests/test_quintic_experiment_manifest.py",
+    "tests/test_x21_architecture_capacity_manifest.py",
+    "tests/test_x21_architecture_capacity_decision.py",
+    "tests/test_x21_d16_resource_preflight_manifest.py",
+    "tests/test_architecture_auto_research.py",
 )
 
 

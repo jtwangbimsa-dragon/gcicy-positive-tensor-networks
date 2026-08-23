@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/gcicy-quintic-architecture-action-v1.schema.json",
+  "title": "Constrained quintic architecture Auto Research action v1",
+  "type": "object",
+  "required": [
+    "schema",
+    "candidate_id",
+    "round",
+    "parent_family_sha256",
+    "search_indices_sha256",
+    "mutation",
+    "pipeline"
+  ],
+  "properties": {
+    "schema": {"const": "gcicy-quintic-architecture-action-v1"},
+    "candidate_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_.-]*$"
+    },
+    "round": {"type": "integer", "minimum": 1},
+    "parent_family_sha256": {"$ref": "#/$defs/sha256"},
+    "search_indices_sha256": {"$ref": "#/$defs/sha256"},
+    "action_sha256": {"$ref": "#/$defs/sha256"},
+    "mutation": {
+      "oneOf": [
+        {"$ref": "#/$defs/topology"},
+        {"$ref": "#/$defs/internalRank"},
+        {"$ref": "#/$defs/sharedLeafRank"},
+        {"$ref": "#/$defs/rootResidual"}
+      ]
+    },
+    "pipeline": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "type": "object",
+          "required": ["kind"],
+          "properties": {"kind": {"const": "local-activate"}},
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind"],
+          "properties": {"kind": {"const": "matched-relax"}},
+          "additionalProperties": false
+        }
+      ],
+      "minItems": 2,
+      "maxItems": 2
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "topology": {
+      "type": "object",
+      "required": ["kind", "transport"],
+      "properties": {
+        "kind": {"const": "topology"},
+        "transport": {"const": "five-leaf-4plus1-to-2plus3"}
+      },
+      "additionalProperties": false
+    },
+    "internalRank": {
+      "type": "object",
+      "required": [
+        "kind",
+        "target",
+        "edge",
+        "source_dimension",
+        "target_dimension",
+        "structural_maximum",
+        "new_output_real_parameters"
+      ],
+      "properties": {
+        "kind": {"const": "rank"},
+        "target": {"const": "internal-edge"},
+        "edge": {"type": "integer", "minimum": 0},
+        "source_dimension": {"type": "integer", "minimum": 1},
+        "target_dimension": {"type": "integer", "minimum": 2},
+        "structural_maximum": {"type": "integer", "minimum": 2},
+        "new_output_real_parameters": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000
+        }
+      },
+      "additionalProperties": false
+    },
+    "sharedLeafRank": {
+      "type": "object",
+      "required": [
+        "kind",
+        "target",
+        "source_dimension",
+        "target_dimension",
+        "structural_maximum",
+        "new_output_real_parameters"
+      ],
+      "properties": {
+        "kind": {"const": "rank"},
+        "target": {"const": "shared-leaf"},
+        "source_dimension": {"type": "integer", "minimum": 1},
+        "target_dimension": {"type": "integer", "minimum": 2},
+        "structural_maximum": {"type": "integer", "minimum": 2},
+        "new_output_real_parameters": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000
+        }
+      },
+      "additionalProperties": false
+    },
+    "rootResidual": {
+      "type": "object",
+      "required": ["kind", "topology", "rank"],
+      "properties": {
+        "kind": {"const": "root-residual"},
+        "topology": {"const": "five-leaf-2plus3"},
+        "rank": {"enum": [2, 4, 8, 16, 25]}
+      },
+      "additionalProperties": false
+    }
+  }
+}
