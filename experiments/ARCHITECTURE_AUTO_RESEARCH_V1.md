@@ -212,8 +212,10 @@ python scripts/run_quintic_architecture_round1_bridge.py execute \
 
 When a predecessor GPU campaign is named, `execute` waits for that exact user
 service and proceeds only after systemd reports `Result=success` and exit status
-zero. A failed, missing, or uninspectable predecessor aborts before Round 1.
-This guard prevents two campaigns from silently sharing the same GPU.
+zero. Immediately before launching a CUDA worker it also rejects any remaining
+compute process reported by `nvidia-smi`. A failed, missing, or uninspectable
+predecessor aborts before Round 1. These guards prevent two campaigns from
+silently sharing the same GPU.
 
 An exact retry returns an existing adjudication or resumes at the first
 unpublished stage. A partially created worker directory is never overwritten;

@@ -431,6 +431,28 @@ def test_wait_for_user_unit_requires_a_proven_success(monkeypatch):
         command.wait_for_user_unit("capacity.service", poll_seconds=17)
 
 
+def test_cuda_idle_guard_rejects_an_existing_compute_process(monkeypatch):
+    from types import SimpleNamespace
+
+    from scripts import run_quintic_architecture_round1_bridge as command
+
+    monkeypatch.setattr(
+        command.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=""),
+    )
+    command.require_cuda_idle()
+    monkeypatch.setattr(
+        command.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0, stdout="1234, python, 15609\n"
+        ),
+    )
+    with pytest.raises(AutoResearchError, match="refusing to share"):
+        command.require_cuda_idle()
+
+
 def test_execute_preflights_before_waiting_and_skips_wait_after_evidence(
     tmp_path, monkeypatch
 ):
@@ -481,6 +503,9 @@ def test_execute_preflights_before_waiting_and_skips_wait_after_evidence(
         lambda *args, **kwargs: events.append("wait"),
     )
     monkeypatch.setattr(
+        command, "require_cuda_idle", lambda: events.append("gpu-idle")
+    )
+    monkeypatch.setattr(
         command, "run_round1_bridge", lambda *args: events.append("run")
     )
     monkeypatch.setattr(
@@ -504,7 +529,15 @@ def test_execute_preflights_before_waiting_and_skips_wait_after_evidence(
         wait_poll_seconds=30,
     )
     command.execute_round1(args)
-    assert events == ["prepare", "wait", "run", "normalize", "record", "adjudicate"]
+    assert events == [
+        "prepare",
+        "wait",
+        "gpu-idle",
+        "run",
+        "normalize",
+        "record",
+        "adjudicate",
+    ]
 
     events.clear()
     command.execute_round1(args)

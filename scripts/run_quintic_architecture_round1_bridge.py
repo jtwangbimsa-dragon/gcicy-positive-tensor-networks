@@ -170,6 +170,29 @@ def wait_for_user_unit(unit: str, *, poll_seconds: int) -> dict[str, str]:
         )
 
 
+def require_cuda_idle() -> None:
+    """Fail before worker launch if another compute process still owns the GPU."""
+
+    completed = subprocess.run(
+        [
+            "nvidia-smi",
+            "--query-compute-apps=pid,process_name,used_gpu_memory",
+            "--format=csv,noheader,nounits",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        raise AutoResearchError("cannot verify that the CUDA GPU is idle")
+    processes = [row.strip() for row in completed.stdout.splitlines() if row.strip()]
+    if processes:
+        raise AutoResearchError(
+            f"refusing to share the CUDA GPU with existing processes: {processes}"
+        )
+    print("CUDA GPU is idle; starting Round 1 workers", flush=True)
+
+
 def execute_round1(args: argparse.Namespace) -> dict[str, object]:
     """Idempotently drive the fixed campaign through Round-1 adjudication."""
 
@@ -194,6 +217,8 @@ def execute_round1(args: argparse.Namespace) -> dict[str, object]:
                 args.wait_for_user_unit,
                 poll_seconds=args.wait_poll_seconds,
             )
+        if args.device == "cuda":
+            require_cuda_idle()
         run_round1_bridge(args.output_root)
         evidence = normalize_round1_bridge(args.output_root)
         store.record_search_evidence(evidence)
