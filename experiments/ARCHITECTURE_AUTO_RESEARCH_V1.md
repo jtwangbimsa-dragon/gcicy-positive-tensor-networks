@@ -202,7 +202,17 @@ seeds, normalizes the evidence, records it, and adjudicates Round 1:
 ```bash
 python scripts/run_quintic_architecture_round1_bridge.py execute \
   --protocol experiments/protocols/generic_quintic_architecture_round1_edge6_v1.json \
-  --wait-for-user-unit preceding-gpu-campaign.service \
+  --wait-for-workflow-run-root /scratch/preceding-workflow \
+  --wait-for-workflow-phase capacity-grid \
+  --wait-for-workflow-phase precision-replay \
+  --wait-for-workflow-phase promotion-decision \
+  --expected-workflow-campaign-id preceding-campaign \
+  --expected-workflow-plan-sha256 <locked-plan-sha256> \
+  --expected-workflow-job-count <selected-closure-count> \
+  --expected-workflow-output-count <selected-output-count> \
+  --expected-workflow-gate-count <selected-gate-count> \
+  --expected-workflow-gpu-slot 0 \
+  --gpu-lock-file /tmp/gcicy-tn-gpu-locks/gcicy-tn-gpu-0.lock \
   --campaign-run-root /scratch/quintic-architecture-auto-v1 \
   --output-root /scratch/quintic-edge6-round1 \
   --baseline-checkpoint 202608231=/path/to/pinned-parent.pt \
@@ -210,12 +220,21 @@ python scripts/run_quintic_architecture_round1_bridge.py execute \
   --baseline-checkpoint 202608233=/path/to/pinned-parent.pt
 ```
 
-When a predecessor GPU campaign is named, `execute` waits for that exact user
-service and proceeds only after systemd reports `Result=success` and exit status
-zero. Immediately before launching a CUDA worker it also rejects any remaining
-compute process reported by `nvidia-smi`. A failed, missing, or uninspectable
-predecessor aborts before Round 1. These guards prevent two campaigns from
-silently sharing the same GPU.
+For a predecessor managed by the checked-in workflow runner, `execute` waits on
+its durable campaign lock instead of an ephemeral service name. After the lock
+is released, it checks the preregistered campaign/plan/job/output/gate counts
+and GPU identity
+against the plan lock, root sentinel, runner lock, and CUDA identity. It then
+requires every selected phase and dependency to have a sealed `succeeded`
+state, re-evaluates every JSON gate, rehashes every unique recorded output,
+and retains the predecessor campaign lock and the exact GPU-slot advisory lock
+for the entire Round 1 run.
+Immediately before launching a CUDA worker it also rejects any remaining
+compute process reported by `nvidia-smi`. A failed, incomplete, tampered, or
+uninspectable predecessor aborts before Round 1. `--wait-for-user-unit` remains
+available for non-workflow predecessors, but a transient unit that is garbage
+collected before inspection fails safely. These guards prevent two campaigns
+from silently sharing the same GPU.
 
 An exact retry returns an existing adjudication or resumes at the first
 unpublished stage. A partially created worker directory is never overwritten;

@@ -453,6 +453,179 @@ def test_cuda_idle_guard_rejects_an_existing_compute_process(monkeypatch):
         command.require_cuda_idle()
 
 
+def test_workflow_guard_verifies_selected_closure_and_output_hashes(tmp_path):
+    from scripts import run_quintic_architecture_round1_bridge as command
+
+    run_root = tmp_path / "predecessor"
+    workflow = run_root / ".workflow"
+    jobs = workflow / "jobs"
+    jobs.mkdir(parents=True)
+    prepare_output = run_root / "prepared.bin"
+    prepare_output.write_bytes(b"sealed preparation")
+    output = run_root / "result.bin"
+    output.write_bytes(b"sealed predecessor result")
+    gate_file = run_root / "gate.json"
+    _write_json(gate_file, {"result": {"q0.0000": 2.0}})
+    plan_sha256 = "a" * 64
+    manifest_sha256 = "d" * 64
+    rows = [
+        {
+            "id": "prepare",
+            "phase": "preparation",
+            "needs": [],
+            "digest": "b" * 64,
+        },
+        {
+            "id": "finish",
+            "phase": "promotion-decision",
+            "needs": ["prepare"],
+            "digest": "c" * 64,
+        },
+    ]
+    _write_json(
+        workflow / "plan.lock.json",
+        {
+            "schema": "gcicy-experiment-plan-lock-v1",
+            "campaign_id": "predecessor-campaign",
+            "plan_sha256": plan_sha256,
+            "manifest_sha256": manifest_sha256,
+            "jobs": rows,
+        },
+    )
+    _write_json(
+        run_root / ".gcicy-experiment-root",
+        {
+            "schema": "gcicy-experiment-root-v1",
+            "campaign_id": "predecessor-campaign",
+            "plan_sha256": plan_sha256,
+            "manifest_sha256": manifest_sha256,
+        },
+    )
+    _write_json(
+        workflow / "runner.lock",
+        {
+            "campaign_id": "predecessor-campaign",
+            "plan_sha256": plan_sha256,
+        },
+    )
+    _write_json(
+        workflow / "cuda_identity.json",
+        {
+            "schema": "gcicy-experiment-cuda-identity-v1",
+            "campaign_id": "predecessor-campaign",
+            "plan_sha256": plan_sha256,
+            "gpu_slot": "0",
+        },
+    )
+    for row in rows:
+        _write_json(
+            jobs / f"{row['id']}.json",
+            {
+                "schema": "gcicy-experiment-job-state-v1",
+                "campaign_id": "predecessor-campaign",
+                "plan_sha256": plan_sha256,
+                "job_id": row["id"],
+                "job_digest": row["digest"],
+                "phase": row["phase"],
+                "status": "succeeded",
+                "outputs": (
+                    [
+                        {
+                            "path": str(output),
+                            "bytes": output.stat().st_size,
+                            "sha256": bridge.sha256_file(output),
+                        },
+                        {
+                            "path": str(gate_file),
+                            "bytes": gate_file.stat().st_size,
+                            "sha256": bridge.sha256_file(gate_file),
+                        },
+                    ]
+                    if row["id"] == "finish"
+                    else [
+                        {
+                            "path": str(prepare_output),
+                            "bytes": prepare_output.stat().st_size,
+                            "sha256": bridge.sha256_file(prepare_output),
+                        }
+                    ]
+                ),
+                "json_gates": (
+                    [
+                        {
+                            "path": str(gate_file),
+                            "field": "result.q0.0000",
+                            "comparison": "ge",
+                            "target": 1.0,
+                            "observed": 2.0,
+                            "passed": True,
+                        }
+                    ]
+                    if row["id"] == "finish"
+                    else []
+                ),
+            },
+        )
+    with command.completed_workflow_guard(
+        run_root,
+        phases=("promotion-decision",),
+        poll_seconds=1,
+        expected_campaign_id="predecessor-campaign",
+        expected_plan_sha256=plan_sha256,
+        expected_job_count=2,
+        expected_output_count=3,
+        expected_gate_count=1,
+        expected_gpu_slot="0",
+    ) as report:
+        assert report["verified_jobs"] == 2
+        assert report["verified_outputs"] == 3
+
+    with pytest.raises(AutoResearchError, match="phases are unknown"):
+        with command.completed_workflow_guard(
+            run_root,
+            phases=("promotion-decision", "typo-phase"),
+            poll_seconds=1,
+            expected_campaign_id="predecessor-campaign",
+            expected_plan_sha256=plan_sha256,
+            expected_job_count=2,
+            expected_output_count=3,
+            expected_gate_count=1,
+            expected_gpu_slot="0",
+        ):
+            pass
+
+    _write_json(gate_file, {"result": {"q0.0000": 0.5}})
+    with pytest.raises(AutoResearchError, match="gate no longer passes"):
+        with command.completed_workflow_guard(
+            run_root,
+            phases=("promotion-decision",),
+            poll_seconds=1,
+            expected_campaign_id="predecessor-campaign",
+            expected_plan_sha256=plan_sha256,
+            expected_job_count=2,
+            expected_output_count=3,
+            expected_gate_count=1,
+            expected_gpu_slot="0",
+        ):
+            pass
+
+    _write_json(gate_file, {"result": {"q0.0000": 2.0}})
+    output.write_bytes(b"tampered")
+    with pytest.raises(AutoResearchError, match="output hash is invalid"):
+        with command.completed_workflow_guard(
+            run_root,
+            phases=("promotion-decision",),
+            poll_seconds=1,
+            expected_campaign_id="predecessor-campaign",
+            expected_plan_sha256=plan_sha256,
+            expected_job_count=2,
+            expected_output_count=3,
+            expected_gate_count=1,
+            expected_gpu_slot="0",
+        ):
+            pass
+
+
 def test_execute_preflights_before_waiting_and_skips_wait_after_evidence(
     tmp_path, monkeypatch
 ):
@@ -526,8 +699,18 @@ def test_execute_preflights_before_waiting_and_skips_wait_after_evidence(
         eval_batch_size=256,
         early_stopping_evaluations=6,
         wait_for_user_unit="capacity.service",
+        wait_for_workflow_run_root=None,
+        wait_for_workflow_phase=[],
+        expected_workflow_campaign_id=None,
+        expected_workflow_plan_sha256=None,
+        expected_workflow_job_count=None,
+        expected_workflow_output_count=None,
+        expected_workflow_gate_count=None,
+        expected_workflow_gpu_slot=None,
+        gpu_lock_file=None,
         wait_poll_seconds=30,
     )
+    args.campaign_run_root.mkdir()
     command.execute_round1(args)
     assert events == [
         "prepare",
