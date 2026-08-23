@@ -28,6 +28,7 @@ from scripts.evaluate_generic_quintic_h4_architecture_arms import (  # noqa: E40
     infer_architecture,
 )
 from scripts.refine_generic_quintic_compiled_tree_native_gn import (  # noqa: E402
+    load_fixed_split_indices,
     load_disjoint_splits,
     load_excluded_indices,
 )
@@ -72,8 +73,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--train-pullbacks", type=Path, required=True)
     parser.add_argument("--selection-points", type=Path, required=True)
     parser.add_argument("--selection-pullbacks", type=Path, required=True)
-    parser.add_argument("--confirmation-points", type=Path, required=True)
-    parser.add_argument("--confirmation-pullbacks", type=Path, required=True)
+    parser.add_argument("--confirmation-points", type=Path)
+    parser.add_argument("--confirmation-pullbacks", type=Path)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument(
         "--exclude-indices-file",
@@ -81,6 +82,7 @@ def parse_args() -> argparse.Namespace:
         nargs="*",
         default=(),
     )
+    parser.add_argument("--fixed-indices-file", type=Path)
     parser.add_argument(
         "--real-parameter-limit",
         type=int,
@@ -146,6 +148,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--feature-batch-size", type=int, default=512)
     parser.add_argument("--eval-batch-size", type=int, default=512)
     parser.add_argument("--seed", type=int, default=202607471)
+    parser.add_argument(
+        "--data-seed",
+        type=int,
+        default=None,
+        help=(
+            "Optional fixed split seed. When omitted, preserve the historical "
+            "behavior and reuse --seed for both data and optimization."
+        ),
+    )
     parser.add_argument("--threads", type=int, default=6)
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cuda")
     parser.add_argument(
@@ -189,19 +200,29 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("all block, optimization, and data values must be positive")
     if args.maximum_selection_tail_relative_degradation < 0:
         raise ValueError("selection tail allowance must be nonnegative")
+    if args.data_seed is not None and args.data_seed < 0:
+        raise ValueError("data seed must be nonnegative")
     if (
         args.target_internal_edge_dimension is not None
         and args.target_internal_edge_dimension <= 0
     ):
         raise ValueError("target internal edge dimension must be positive")
     if args.target_internal_edge_dimension is not None and args.target_edge:
-        raise ValueError(
-            "use either a common internal target or explicit edge targets"
-        )
+        raise ValueError("use either a common internal target or explicit edge targets")
     if args.expansion_only and not (
         args.target_internal_edge_dimension is not None or args.target_edge
     ):
         raise ValueError("expansion-only training requires a rank expansion")
+    if args.development_only and (
+        args.confirmation_points is not None or args.confirmation_pullbacks is not None
+    ):
+        raise ValueError("development-only runs must not receive confirmation paths")
+    if not args.development_only and (
+        args.confirmation_points is None or args.confirmation_pullbacks is None
+    ):
+        raise ValueError(
+            "confirmation paths are required unless --development-only is set"
+        )
 
 
 def parse_target_edges(specifications: list[str]) -> dict[int, int]:
@@ -212,9 +233,7 @@ def parse_target_edges(specifications: list[str]) -> dict[int, int]:
             edge = int(edge_text)
             dimension = int(dimension_text)
         except (TypeError, ValueError) as error:
-            raise ValueError(
-                "target edges must use EDGE:DIMENSION syntax"
-            ) from error
+            raise ValueError("target edges must use EDGE:DIMENSION syntax") from error
         if edge < 0 or dimension <= 0:
             raise ValueError("target edge and dimension must be nonnegative")
         if edge in targets:
@@ -323,10 +342,7 @@ def enumerate_direct_blocks(
                 )
     if not blocks:
         raise ValueError("tree exposes no direct training blocks")
-    if any(
-        block.real_parameter_count > real_parameter_limit
-        for block in blocks
-    ):
+    if any(block.real_parameter_count > real_parameter_limit for block in blocks):
         raise AssertionError("direct block exceeds the registered limit")
     return blocks
 
@@ -383,9 +399,7 @@ def enumerate_expansion_blocks(
             )
 
     maximum_complex = real_parameter_limit // 2
-    internal_edges = [
-        edge for edge in expanded_edges if edge >= model.leaf_count
-    ]
+    internal_edges = [edge for edge in expanded_edges if edge >= model.leaf_count]
     for edge in internal_edges:
         name = f"internal_tensors.{edge - model.leaf_count}"
         parameter = named[name]
@@ -396,10 +410,7 @@ def enumerate_expansion_blocks(
             chunk_stop = min(chunk_start + maximum_complex, stop)
             blocks.append(
                 DirectBlock(
-                    name=(
-                        f"new_output_edge_{edge}"
-                        f"[{chunk_start}:{chunk_stop}]"
-                    ),
+                    name=(f"new_output_edge_{edge}" f"[{chunk_start}:{chunk_stop}]"),
                     parameter_names=(name,),
                     real_parameter_count=2 * (chunk_stop - chunk_start),
                     learning_rate=learning_rate,
@@ -407,26 +418,15 @@ def enumerate_expansion_blocks(
                     mask_selection=(chunk_start, chunk_stop),
                 )
             )
-    leaf_edges = [
-        edge for edge in expanded_edges if edge < model.leaf_count
-    ]
+    leaf_edges = [edge for edge in expanded_edges if edge < model.leaf_count]
     if leaf_edges:
         if not model.shared_leaf:
-            raise ValueError(
-                "shared-leaf expansion blocks require shared leaf tensors"
-            )
+            raise ValueError("shared-leaf expansion blocks require shared leaf tensors")
         if leaf_edges != list(range(model.leaf_count)):
             raise ValueError("every shared leaf edge must expand together")
-        source_leaf_dimensions = {
-            source_edge_dimensions[edge] for edge in leaf_edges
-        }
-        target_leaf_dimensions = {
-            model.edge_dimensions[edge] for edge in leaf_edges
-        }
-        if (
-            len(source_leaf_dimensions) != 1
-            or len(target_leaf_dimensions) != 1
-        ):
+        source_leaf_dimensions = {source_edge_dimensions[edge] for edge in leaf_edges}
+        target_leaf_dimensions = {model.edge_dimensions[edge] for edge in leaf_edges}
+        if len(source_leaf_dimensions) != 1 or len(target_leaf_dimensions) != 1:
             raise ValueError("shared leaf edge dimensions are inconsistent")
         name = "shared_leaf_tensor"
         parameter = named[name]
@@ -437,10 +437,7 @@ def enumerate_expansion_blocks(
             chunk_stop = min(chunk_start + maximum_complex, stop)
             blocks.append(
                 DirectBlock(
-                    name=(
-                        "new_shared_leaf_output"
-                        f"[{chunk_start}:{chunk_stop}]"
-                    ),
+                    name=("new_shared_leaf_output" f"[{chunk_start}:{chunk_stop}]"),
                     parameter_names=(name,),
                     real_parameter_count=2 * (chunk_stop - chunk_start),
                     learning_rate=(
@@ -452,10 +449,7 @@ def enumerate_expansion_blocks(
                     mask_selection=(chunk_start, chunk_stop),
                 )
             )
-    if any(
-        block.real_parameter_count > real_parameter_limit
-        for block in blocks
-    ):
+    if any(block.real_parameter_count > real_parameter_limit for block in blocks):
         raise AssertionError("rank-growth block exceeds the registered limit")
     return blocks
 
@@ -522,13 +516,11 @@ def main() -> None:
         if not isinstance(source_model, PositiveMultiplicationTreeMetric):
             raise TypeError("checkpoint did not reconstruct a multiplication tree")
         source_model.eval()
+        source_real_parameter_count = source_model.trainable_real_parameter_count
         expansion: dict[str, Any] | None = None
         model = source_model
         explicit_targets = parse_target_edges(args.target_edge)
-        if (
-            args.target_internal_edge_dimension is not None
-            or explicit_targets
-        ):
+        if args.target_internal_edge_dimension is not None or explicit_targets:
             source_dimensions = tuple(source_model.edge_dimensions)
             target_dimensions = list(source_dimensions)
             if args.target_internal_edge_dimension is not None:
@@ -536,9 +528,7 @@ def main() -> None:
                     source_model.leaf_count,
                     source_model.topology.root,
                 ):
-                    target_dimensions[edge] = (
-                        args.target_internal_edge_dimension
-                    )
+                    target_dimensions[edge] = args.target_internal_edge_dimension
             else:
                 leaf_targets = {
                     edge: dimension
@@ -547,24 +537,14 @@ def main() -> None:
                 }
                 if leaf_targets:
                     if not source_model.shared_leaf:
-                        raise ValueError(
-                            "explicit leaf growth requires shared leaves"
-                        )
-                    if set(leaf_targets) != set(
-                        range(source_model.leaf_count)
-                    ):
-                        raise ValueError(
-                            "every shared leaf edge must receive a target"
-                        )
+                        raise ValueError("explicit leaf growth requires shared leaves")
+                    if set(leaf_targets) != set(range(source_model.leaf_count)):
+                        raise ValueError("every shared leaf edge must receive a target")
                     if len(set(leaf_targets.values())) != 1:
-                        raise ValueError(
-                            "shared leaf targets must have one dimension"
-                        )
+                        raise ValueError("shared leaf targets must have one dimension")
                 for edge, dimension in explicit_targets.items():
                     if not 0 <= edge < source_model.topology.root:
-                        raise ValueError(
-                            f"edge {edge} is not a nonroot tree edge"
-                        )
+                        raise ValueError(f"edge {edge} is not a nonroot tree edge")
                     target_dimensions[edge] = dimension
             target_dimensions = tuple(target_dimensions)
             if any(
@@ -594,6 +574,7 @@ def main() -> None:
                 "orthogonalized": args.orthogonalize_new_outputs,
             }
         model.eval()
+        candidate_real_parameter_count = model.trainable_real_parameter_count
         initial_state = copy.deepcopy(model.state_dict())
         blocks = enumerate_direct_blocks(
             model,
@@ -606,9 +587,7 @@ def main() -> None:
                 raise AssertionError("rank expansion metadata is unavailable")
             blocks = enumerate_expansion_blocks(
                 model,
-                source_edge_dimensions=tuple(
-                    expansion["source_edge_dimensions"]
-                ),
+                source_edge_dimensions=tuple(expansion["source_edge_dimensions"]),
                 real_parameter_limit=args.real_parameter_limit,
                 learning_rate=args.internal_learning_rate,
                 leaf_learning_rate=args.leaf_learning_rate,
@@ -646,8 +625,9 @@ def main() -> None:
             )
         split_arrays, split_indices = load_disjoint_splits(
             split_specifications,
-            seed=args.seed,
+            seed=args.seed if args.data_seed is None else args.data_seed,
             exclusions=excluded,
+            fixed_indices=load_fixed_split_indices(args.fixed_indices_file),
         )
         datasets = {
             name: whiten_dataset(
@@ -807,15 +787,9 @@ def main() -> None:
                             deferred_improves = bool(
                                 args.defer_block_acceptance
                                 and selection["sigma_official_formula"]
-                                < deferred_best_selection[
-                                    "sigma_official_formula"
-                                ]
-                                and selection[
-                                    "weighted_rms_abs_residual"
-                                ]
-                                < deferred_best_selection[
-                                    "weighted_rms_abs_residual"
-                                ]
+                                < deferred_best_selection["sigma_official_formula"]
+                                and selection["weighted_rms_abs_residual"]
+                                < deferred_best_selection["weighted_rms_abs_residual"]
                                 and zero_nonpositive(selection)
                                 and tail_guard(
                                     tail,
@@ -826,9 +800,7 @@ def main() -> None:
                                 )
                             )
                             if deferred_improves:
-                                deferred_best_state = copy.deepcopy(
-                                    model.state_dict()
-                                )
+                                deferred_best_state = copy.deepcopy(model.state_dict())
                                 deferred_best_selection = selection
                                 deferred_best_tail = tail
                                 deferred_updates += 1
@@ -857,8 +829,7 @@ def main() -> None:
                         )
                         if (
                             evaluate
-                            and stale_evaluations
-                            >= args.early_stopping_evaluations
+                            and stale_evaluations >= args.early_stopping_evaluations
                         ):
                             break
                 finally:
@@ -906,9 +877,7 @@ def main() -> None:
         confirmation = None
         if args.development_only:
             confirmation_passes = None
-            final_state = (
-                candidate_state if accepted_blocks > 0 else initial_state
-            )
+            final_state = candidate_state if accepted_blocks > 0 else initial_state
         else:
             model.load_state_dict(initial_state)
             (
@@ -950,9 +919,7 @@ def main() -> None:
                     relative_degradation=0.0,
                 )
             )
-            final_state = (
-                candidate_state if confirmation_passes else initial_state
-            )
+            final_state = candidate_state if confirmation_passes else initial_state
             confirmation = {
                 "baseline": baseline_confirmation,
                 "baseline_tail": baseline_confirmation_tail,
@@ -982,9 +949,7 @@ def main() -> None:
             )
         else:
             output_checkpoint = output_dir / (
-                "accepted.pt"
-                if confirmation_passes
-                else "baseline_retained.pt"
+                "accepted.pt" if confirmation_passes else "baseline_retained.pt"
             )
         torch.save(
             {
@@ -1015,6 +980,7 @@ def main() -> None:
         report = {
             "schema": "generic-quintic-adaptive-direct-blocks-report-v1",
             "teacher_role": "absent",
+            "parent_checkpoint_sha256": checkpoint_sha256,
             "configuration": {
                 **vars(args),
                 "initial_checkpoint": str(checkpoint_path),
@@ -1023,6 +989,13 @@ def main() -> None:
             "blocks": [asdict(block) for block in blocks],
             "expansion": expansion,
             "embedding_audit": embedding_audit,
+            "parameter_count": {
+                "control_trainable_real_parameters": source_real_parameter_count,
+                "candidate_trainable_real_parameters": (candidate_real_parameter_count),
+                "new_real_parameters": (
+                    candidate_real_parameter_count - source_real_parameter_count
+                ),
+            },
             "initial_selection": initial_selection,
             "initial_selection_tail": initial_selection_tail,
             "final_selection": current_selection,
@@ -1033,9 +1006,33 @@ def main() -> None:
             "data": {
                 "indices": str(indices_path),
                 "indices_sha256": sha256_file(indices_path),
+                "fixed_indices_file": (
+                    None
+                    if args.fixed_indices_file is None
+                    else str(args.fixed_indices_file.expanduser().resolve())
+                ),
+                "fixed_indices_file_sha256": (
+                    None
+                    if args.fixed_indices_file is None
+                    else sha256_file(args.fixed_indices_file.expanduser().resolve())
+                ),
+                "data_seed": args.seed if args.data_seed is None else args.data_seed,
+                "input_sha256": {
+                    "train_points": sha256_file(
+                        args.train_points.expanduser().resolve()
+                    ),
+                    "train_pullbacks": sha256_file(
+                        args.train_pullbacks.expanduser().resolve()
+                    ),
+                    "selection_points": sha256_file(
+                        args.selection_points.expanduser().resolve()
+                    ),
+                    "selection_pullbacks": sha256_file(
+                        args.selection_pullbacks.expanduser().resolve()
+                    ),
+                },
                 "counts": {
-                    name: int(len(rows))
-                    for name, rows in split_indices.items()
+                    name: int(len(rows)) for name, rows in split_indices.items()
                 },
             },
             "development_candidate": str(candidate_path),

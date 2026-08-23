@@ -1,0 +1,106 @@
+{
+  "schema": "gcicy-quintic-architecture-auto-research-protocol-v1",
+  "campaign_id": "generic-quintic-edge6-capacity-round1-20260823",
+  "baseline_family": {
+    "models": [
+      {
+        "seed": 202608231,
+        "checkpoint_sha256": "1836b868f9b852f0ab29172a83c07caf4c47d2e75f71b9ff588add2d4f96359b"
+      },
+      {
+        "seed": 202608232,
+        "checkpoint_sha256": "1836b868f9b852f0ab29172a83c07caf4c47d2e75f71b9ff588add2d4f96359b"
+      },
+      {
+        "seed": 202608233,
+        "checkpoint_sha256": "1836b868f9b852f0ab29172a83c07caf4c47d2e75f71b9ff588add2d4f96359b"
+      }
+    ]
+  },
+  "promotion_seeds": [
+    202608231,
+    202608232,
+    202608233
+  ],
+  "search_inputs": [
+    {
+      "role": "baseline-checkpoint",
+      "path": "/home/juntao-wang/gcicy_metric_k2_20260710/outputs/generic_quintic_tree_compiler_20260727/fast_adaptive_target001_seed202607474/best_development_checkpoint.pt",
+      "sha256": "1836b868f9b852f0ab29172a83c07caf4c47d2e75f71b9ff588add2d4f96359b",
+      "bytes": 688403
+    },
+    {
+      "role": "baseline-source-report",
+      "path": "/home/juntao-wang/gcicy_metric_k2_20260710/outputs/generic_quintic_tree_compiler_20260727/fast_adaptive_target001_seed202607474/round_05_shared_leaf_to_10/report.json",
+      "sha256": "6167c8463a54aca58b1f7466655255b32ab7cb1f2822dca26a32557eabe950c9",
+      "bytes": 846610
+    },
+    {
+      "role": "search-native-points",
+      "path": "/home/juntao-wang/gcicy_metric_k2_20260710/outputs/generic_quintic_kill_test_20260726/data_production_seed202607262/native/points.npz",
+      "sha256": "3ce7ca795fb0ec5ce4dc6e86d4e6ca3fe83eb2270a9929ce3f5986904fc75e7a",
+      "bytes": 12133925
+    },
+    {
+      "role": "search-native-pullbacks",
+      "path": "/home/juntao-wang/gcicy_metric_k2_20260710/outputs/generic_quintic_kill_test_20260726/data_production_seed202607262/native/pullbacks.npy",
+      "sha256": "242dccf4e9e9907e26a28924a698f72e6a3e0abeb544547c4ed899d8bca36a83",
+      "bytes": 12000128
+    },
+    {
+      "role": "development-evaluation-points",
+      "path": "/home/juntao-wang/gcicy_metric_k2_20260710/outputs/generic_quintic_kill_test_20260726/data_production_seed202607262/selection/points.npz",
+      "sha256": "5e90b7efe7e5451925da211c27c354d5aed4bf14ac20c6cf86bc11f4a5bceccf",
+      "bytes": 2427637
+    },
+    {
+      "role": "development-evaluation-pullbacks",
+      "path": "/home/juntao-wang/gcicy_metric_k2_20260710/outputs/generic_quintic_kill_test_20260726/data_production_seed202607262/selection/pullbacks.npy",
+      "sha256": "6601c5d4e138c6e5d2bf17ee9258dff39a4c62147b20a8ab0387b3a27ddf34d0",
+      "bytes": 2400128
+    }
+  ],
+  "search_index_plan": {
+    "seed": 2026082301,
+    "partition_seed": 2026082302,
+    "train_population": 100000,
+    "train_count": 35000,
+    "evaluation_population": 20000,
+    "evaluation_count": 5000,
+    "shared_population": false
+  },
+  "budgets": {
+    "local_activate": {
+      "optimizer_updates": 1200,
+      "batch_size": 1024,
+      "learning_rate": 0.0003,
+      "gradient_clip_norm": 1.0,
+      "train_examples": 30000,
+      "evaluation_examples": 5000,
+      "eval_every": 10,
+      "scheduler": "cosine"
+    },
+    "matched_relax": {
+      "optimizer_updates": 600,
+      "batch_size": 1024,
+      "learning_rate": 0.000003,
+      "gradient_clip_norm": 1.0,
+      "train_examples": 30000,
+      "evaluation_examples": 5000,
+      "eval_every": 25,
+      "scheduler": "cosine"
+    }
+  },
+  "thresholds": {
+    "minimum_median_relative_sigma_gain": 0.002,
+    "minimum_median_relative_chi_gain": 0.002,
+    "minimum_improved_seeds": 2,
+    "minimum_paired_ci_positive_seeds": 3,
+    "maximum_seed_relative_regression": 0.0,
+    "maximum_search_tail_relative_degradation": 0.005,
+    "equivalence_potential_absolute_tolerance": 0.00001,
+    "equivalence_metric_relative_tolerance": 0.0002,
+    "maximum_c128_relative_sigma_delta": 0.005
+  },
+  "maximum_rounds": 4
+}

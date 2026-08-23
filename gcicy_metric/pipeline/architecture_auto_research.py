@@ -480,6 +480,7 @@ def _normalize_index_plan(value: Any) -> dict[str, Any]:
             "evaluation_count",
             "shared_population",
         },
+        optional={"partition_seed"},
         context="search_index_plan",
     )
     result = {
@@ -501,6 +502,12 @@ def _normalize_index_plan(value: Any) -> dict[str, Any]:
         ),
         "shared_population": value["shared_population"],
     }
+    if "partition_seed" in value:
+        result["partition_seed"] = _positive_int(
+            value["partition_seed"],
+            context="search_index_plan.partition_seed",
+            allow_zero=True,
+        )
     if not isinstance(result["shared_population"], bool):
         raise AutoResearchError("search_index_plan.shared_population must be boolean")
     if result["train_count"] > result["train_population"]:
@@ -840,6 +847,24 @@ def _normalize_paired(value: Any, *, context: str) -> dict[str, float]:
     }
 
 
+def _normalize_source_report_hashes(
+    value: Any,
+    *,
+    context: str,
+) -> dict[str, str]:
+    if not isinstance(value, dict):
+        raise AutoResearchError(f"{context} must be an object")
+    _require_exact_keys(
+        value,
+        required={"local_activate", "matched_relax"},
+        context=context,
+    )
+    return {
+        key: _normalized_sha256(value[key], context=f"{context}.{key}")
+        for key in ("local_activate", "matched_relax")
+    }
+
+
 def _normalize_seed_evidence(
     value: Any,
     *,
@@ -866,6 +891,8 @@ def _normalize_seed_evidence(
             "candidate_checkpoint_sha256",
             "control_trainable_real_parameter_count",
             "candidate_trainable_real_parameter_count",
+            "data_indices_sha256",
+            "source_report_sha256",
         },
         context=context,
     )
@@ -933,6 +960,14 @@ def _normalize_seed_evidence(
         "candidate_trainable_real_parameter_count": _positive_int(
             value["candidate_trainable_real_parameter_count"],
             context=f"{context}.candidate_trainable_real_parameter_count",
+        ),
+        "data_indices_sha256": _normalized_sha256(
+            value["data_indices_sha256"],
+            context=f"{context}.data_indices_sha256",
+        ),
+        "source_report_sha256": _normalize_source_report_hashes(
+            value["source_report_sha256"],
+            context=f"{context}.source_report_sha256",
         ),
     }
     if not isinstance(result["equivalence"]["passed"], bool):
@@ -1023,6 +1058,7 @@ def adjudicate_candidate(
     all_positive = True
     all_tail_safe = True
     observed_parameter_deltas: list[int] = []
+    data_indices_hashes: set[str] = set()
     for row in evidence["seeds"]:
         control = row["control"]
         candidate = row["candidate"]
@@ -1098,6 +1134,7 @@ def adjudicate_candidate(
         sigma_gains.append(sigma_gain)
         chi_gains.append(chi_gain)
         observed_parameter_deltas.append(parameter_delta)
+        data_indices_hashes.add(row["data_indices_sha256"])
         seed_rows.append(
             {
                 "seed": row["seed"],
@@ -1126,6 +1163,8 @@ def adjudicate_candidate(
                 "paired_ci_passes": paired_ok,
                 "control_checkpoint_sha256": row["control_checkpoint_sha256"],
                 "candidate_checkpoint_sha256": row["candidate_checkpoint_sha256"],
+                "data_indices_sha256": row["data_indices_sha256"],
+                "source_report_sha256": row["source_report_sha256"],
             }
         )
     median_sigma = statistics.median(sigma_gains)
@@ -1137,6 +1176,7 @@ def adjudicate_candidate(
         "fixed_search_indices": (
             evidence["search_indices_sha256"] == action["search_indices_sha256"]
         ),
+        "fixed_worker_data_indices": len(data_indices_hashes) == 1,
         "matched_budgets": all_budgets_match,
         "matched_batch_plans": all_batch_plans_match,
         "parameter_accounting": (
@@ -1223,6 +1263,9 @@ def adjudicate_round(
     control_evidence_by_seed: dict[int, set[str]] = {
         seed: set() for seed in protocol["promotion_seeds"]
     }
+    data_indices_by_seed: dict[int, set[str]] = {
+        seed: set() for seed in protocol["promotion_seeds"]
+    }
     for evidence in evidences:
         candidate_id = str(evidence.get("candidate_id", ""))
         if candidate_id not in actions:
@@ -1256,19 +1299,25 @@ def adjudicate_round(
                     }
                 )
             )
+            data_indices_by_seed[row["seed"]].add(row["data_indices_sha256"])
     common_control = all(
         len(values) == 1 for values in control_evidence_by_seed.values()
     )
     common_batch_plan = all(len(values) == 1 for values in batch_plan_by_seed.values())
-    if not common_control or not common_batch_plan:
+    common_data_indices = all(
+        len(values) == 1 for values in data_indices_by_seed.values()
+    )
+    if not common_control or not common_batch_plan or not common_data_indices:
         for row in adjudications:
             row["gates"]["common_no_growth_control"] = common_control
             row["gates"]["common_matched_relax_batch_plan"] = common_batch_plan
+            row["gates"]["common_worker_data_indices"] = common_data_indices
             row["promotion_passes"] = False
     else:
         for row in adjudications:
             row["gates"]["common_no_growth_control"] = True
             row["gates"]["common_matched_relax_batch_plan"] = True
+            row["gates"]["common_worker_data_indices"] = True
     passing = [row for row in adjudications if row["promotion_passes"]]
     winner = None
     if passing:
@@ -1287,6 +1336,7 @@ def adjudicate_round(
         "candidate_count": len(adjudications),
         "common_no_growth_control": common_control,
         "common_matched_relax_batch_plan": common_batch_plan,
+        "common_worker_data_indices": common_data_indices,
         "control_checkpoints_by_seed": {
             str(seed): sorted(values) for seed, values in control_by_seed.items()
         },
@@ -1296,6 +1346,9 @@ def adjudicate_round(
         },
         "batch_plans_by_seed": {
             str(seed): sorted(values) for seed, values in batch_plan_by_seed.items()
+        },
+        "data_indices_by_seed": {
+            str(seed): sorted(values) for seed, values in data_indices_by_seed.items()
         },
         "candidates": sorted(adjudications, key=lambda row: row["candidate_id"]),
         "winner_candidate_id": None if winner is None else winner["candidate_id"],

@@ -168,6 +168,15 @@ def evidence(
                     100_000
                     + int(action["mutation"].get("new_output_real_parameters", 0))
                 ),
+                "data_indices_sha256": token("fixed-worker-data-indices"),
+                "source_report_sha256": {
+                    "local_activate": token(
+                        f"local-report-{action['candidate_id']}-{seed}"
+                    ),
+                    "matched_relax": token(
+                        f"relax-report-{action['candidate_id']}-{seed}"
+                    ),
+                },
             }
         )
     return {

@@ -15,7 +15,7 @@ from pathlib import Path
 import sys
 import time
 import traceback
-from typing import Any
+from typing import Any, Mapping
 
 import numpy as np
 import torch
@@ -123,17 +123,13 @@ def validate_args(args: argparse.Namespace) -> None:
     )
     if any(value <= 0 for value in positive):
         raise ValueError("all split, batch, thread, and Lanczos sizes must be positive")
-    if (
-        not args.ridge_factors
-        or any(not np.isfinite(value) or value <= 0 for value in args.ridge_factors)
+    if not args.ridge_factors or any(
+        not np.isfinite(value) or value <= 0 for value in args.ridge_factors
     ):
         raise ValueError("ridge factors must be finite and positive")
-    if (
-        not args.line_search_alphas
-        or any(
-            not np.isfinite(value) or value <= 0 or value > 1
-            for value in args.line_search_alphas
-        )
+    if not args.line_search_alphas or any(
+        not np.isfinite(value) or value <= 0 or value > 1
+        for value in args.line_search_alphas
     ):
         raise ValueError("line-search alphas must lie in (0, 1]")
     if (
@@ -168,6 +164,7 @@ def load_disjoint_splits(
     *,
     seed: int,
     exclusions: dict[str, np.ndarray] | None = None,
+    fixed_indices: Mapping[str, np.ndarray] | None = None,
 ) -> tuple[
     dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]],
     dict[str, np.ndarray],
@@ -207,15 +204,50 @@ def load_disjoint_splits(
         )
         if total > len(available):
             raise ValueError("requested disjoint splits exceed a shared point pool")
-        permutation = np.random.default_rng(
-            seed + 1009 * group_index
-        ).permutation(available)[:total]
+        permutation = None
+        if fixed_indices is None:
+            permutation = np.random.default_rng(seed + 1009 * group_index).permutation(
+                available
+            )[:total]
         offset = 0
+        group_selected: list[np.ndarray] = []
         for name, size in rows:
-            selected = np.asarray(
-                permutation[offset : offset + size],
-                dtype=np.int64,
-            )
+            if fixed_indices is None:
+                assert permutation is not None
+                selected = np.asarray(
+                    permutation[offset : offset + size],
+                    dtype=np.int64,
+                )
+            else:
+                if name not in fixed_indices:
+                    raise ValueError(f"fixed indices are missing split {name}")
+                raw = np.asarray(fixed_indices[name])
+                if raw.ndim != 1 or not np.issubdtype(raw.dtype, np.integer):
+                    raise ValueError(
+                        f"fixed indices for {name} must be a one-dimensional integer array"
+                    )
+                selected = np.asarray(raw, dtype=np.int64)
+                if len(selected) != size:
+                    raise ValueError(
+                        f"fixed indices for {name} have {len(selected)} rows, expected {size}"
+                    )
+                if len(np.unique(selected)) != len(selected):
+                    raise ValueError(f"fixed indices for {name} contain duplicates")
+                if np.any((selected < 0) | (selected >= len(values))):
+                    raise ValueError(
+                        f"fixed indices for {name} are outside their source pool"
+                    )
+                if np.intersect1d(selected, excluded_rows).size:
+                    raise ValueError(
+                        f"fixed indices for {name} intersect excluded rows"
+                    )
+                if any(
+                    np.intersect1d(selected, prior).size for prior in group_selected
+                ):
+                    raise ValueError(
+                        "fixed logical splits sharing one pool must be disjoint"
+                    )
+                group_selected.append(selected)
             arrays[name] = (
                 np.asarray(values[selected]),
                 np.asarray(labels[selected]),
@@ -224,6 +256,25 @@ def load_disjoint_splits(
             indices[name] = selected
             offset += size
     return arrays, indices
+
+
+def load_fixed_split_indices(path: Path | None) -> dict[str, np.ndarray] | None:
+    """Load a create-only exact split artifact without coercing bad dtypes."""
+
+    if path is None:
+        return None
+    artifact = np.load(path.expanduser().resolve(), allow_pickle=False)
+    result: dict[str, np.ndarray] = {}
+    for name in artifact.files:
+        value = np.asarray(artifact[name])
+        if value.ndim != 1 or not np.issubdtype(value.dtype, np.integer):
+            raise ValueError(
+                f"fixed indices for {name} must be a one-dimensional integer array"
+            )
+        result[name] = value
+    if not result:
+        raise ValueError("fixed indices artifact contains no arrays")
+    return result
 
 
 def load_excluded_indices(
@@ -250,11 +301,7 @@ def load_excluded_indices(
                     )
                     break
     return {
-        name: (
-            np.unique(np.concatenate(rows))
-            if rows
-            else np.empty(0, dtype=np.int64)
-        )
+        name: (np.unique(np.concatenate(rows)) if rows else np.empty(0, dtype=np.int64))
         for name, rows in result.items()
     }
 
@@ -437,8 +484,7 @@ def main() -> None:
             base_delta = -fit_operator.vjp(dual)
             predicted_fit = residual + fit_operator.jvp(base_delta)
             predicted_selection = (
-                selection_operator.residual()
-                + selection_operator.jvp(base_delta)
+                selection_operator.residual() + selection_operator.jvp(base_delta)
             )
             for line_alpha in args.line_search_alphas:
                 delta = float(line_alpha) * base_delta
@@ -473,9 +519,7 @@ def main() -> None:
                     candidates.append(row)
                     continue
                 try:
-                    fit_candidate_residual = fit_operator.residual(
-                        candidate_vector
-                    )
+                    fit_candidate_residual = fit_operator.residual(candidate_vector)
                     selection_candidate_residual = selection_operator.residual(
                         candidate_vector
                     )
@@ -505,8 +549,7 @@ def main() -> None:
                             ),
                             "actual_selection_e2": actual_selection_e2,
                             "actual_selection_capture": (
-                                1.0
-                                - actual_selection_e2 / selection_base_e2
+                                1.0 - actual_selection_e2 / selection_base_e2
                             ),
                             "selection_statistics": statistics,
                             "selection_tail": tail,
@@ -553,16 +596,20 @@ def main() -> None:
         paired = None
         if selected is not None:
             model.load_state_dict(baseline_state)
-            baseline_confirmation, baseline_confirmation_ratio, (
-                baseline_confirmation_tail
+            (
+                baseline_confirmation,
+                baseline_confirmation_ratio,
+                (baseline_confirmation_tail),
             ) = metric_row(
                 model,
                 datasets["confirmation"],
                 chunk_size=args.eval_batch_size,
             )
             set_parameter_vector_(model, vectorizer, selected["_vector"])
-            candidate_confirmation, candidate_confirmation_ratio, (
-                candidate_confirmation_tail
+            (
+                candidate_confirmation,
+                candidate_confirmation_ratio,
+                (candidate_confirmation_tail),
             ) = metric_row(
                 model,
                 datasets["confirmation"],
@@ -594,9 +641,7 @@ def main() -> None:
             key: value.detach().cpu().clone()
             for key, value in model.state_dict().items()
         }
-        output_payload["parent_checkpoint_sha256"] = sha256_file(
-            checkpoint_path
-        )
+        output_payload["parent_checkpoint_sha256"] = sha256_file(checkpoint_path)
         output_payload["teacher_runtime_dependency"] = False
         output_payload["confirmation_passes"] = confirmation_passes
         output_payload["native_tree_gn"] = {
@@ -631,9 +676,7 @@ def main() -> None:
             "objective": {
                 "name": "model-normalized native MA E2",
                 "normalization_derivative_included": True,
-                "formula": (
-                    "sum_i w_i (exp(ell_i-logsumexp_j(log(w_j)+ell_j))-1)^2"
-                ),
+                "formula": ("sum_i w_i (exp(ell_i-logsumexp_j(log(w_j)+ell_j))-1)^2"),
             },
             "configuration": {
                 **vars(args),
@@ -688,12 +731,10 @@ def main() -> None:
                     for path in args.exclude_indices_file
                 ],
                 "excluded_counts": {
-                    name: int(len(values))
-                    for name, values in excluded_indices.items()
+                    name: int(len(values)) for name, values in excluded_indices.items()
                 },
                 "counts": {
-                    name: int(len(values))
-                    for name, values in split_indices.items()
+                    name: int(len(values)) for name, values in split_indices.items()
                 },
             },
             "checkpoint": str(saved_checkpoint),

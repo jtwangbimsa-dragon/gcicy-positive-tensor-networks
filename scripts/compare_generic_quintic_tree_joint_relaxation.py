@@ -24,6 +24,7 @@ from scripts.evaluate_generic_quintic_h4_architecture_arms import (  # noqa: E40
     infer_architecture,
 )
 from scripts.refine_generic_quintic_compiled_tree_native_gn import (  # noqa: E402
+    load_fixed_split_indices,
     load_disjoint_splits,
     load_excluded_indices,
 )
@@ -54,8 +55,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--train-pullbacks", type=Path, required=True)
     parser.add_argument("--selection-points", type=Path, required=True)
     parser.add_argument("--selection-pullbacks", type=Path, required=True)
-    parser.add_argument("--confirmation-points", type=Path, required=True)
-    parser.add_argument("--confirmation-pullbacks", type=Path, required=True)
+    parser.add_argument("--confirmation-points", type=Path)
+    parser.add_argument("--confirmation-pullbacks", type=Path)
+    parser.add_argument("--development-evaluation-points", type=Path)
+    parser.add_argument("--development-evaluation-pullbacks", type=Path)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument(
         "--exclude-indices-file",
@@ -63,12 +66,20 @@ def parse_args() -> argparse.Namespace:
         nargs="*",
         default=(),
     )
+    parser.add_argument("--fixed-indices-file", type=Path)
+    parser.add_argument("--fixed-batch-plan-file", type=Path)
     parser.add_argument("--steps", type=int, default=600)
     parser.add_argument("--learning-rate", type=float, default=3.0e-6)
+    parser.add_argument(
+        "--scheduler",
+        choices=("constant", "cosine"),
+        default="cosine",
+    )
     parser.add_argument("--eval-every", type=int, default=25)
     parser.add_argument("--train-size", type=int, default=30_000)
     parser.add_argument("--selection-size", type=int, default=5_000)
     parser.add_argument("--confirmation-size", type=int, default=5_000)
+    parser.add_argument("--development-evaluation-size", type=int, default=5_000)
     parser.add_argument("--stochastic-batch-size", type=int, default=2_048)
     parser.add_argument("--gradient-clip-norm", type=float, default=1.0)
     parser.add_argument(
@@ -90,12 +101,39 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--feature-batch-size", type=int, default=512)
     parser.add_argument("--eval-batch-size", type=int, default=256)
     parser.add_argument("--seed", type=int, default=202607477)
+    parser.add_argument(
+        "--data-seed",
+        type=int,
+        default=None,
+        help=(
+            "Optional fixed split seed. When omitted, preserve the historical "
+            "behavior and reuse --seed for data sampling."
+        ),
+    )
+    parser.add_argument(
+        "--batch-plan-seed",
+        type=int,
+        default=None,
+        help=(
+            "Optional explicit minibatch-plan seed. When omitted, preserve the "
+            "historical --seed + 17 behavior."
+        ),
+    )
     parser.add_argument("--threads", type=int, default=6)
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cuda")
     parser.add_argument(
         "--development-only",
         action="store_true",
         help="Skip the independent confirmation split.",
+    )
+    parser.add_argument(
+        "--development-evaluation",
+        action="store_true",
+        help=(
+            "With --development-only, evaluate paired confidence intervals on "
+            "a preregistered development split without using it for checkpoint "
+            "selection."
+        ),
     )
     return parser.parse_args()
 
@@ -161,6 +199,23 @@ def relative_gain(start: float, final: float) -> float:
     return (start - final) / start
 
 
+def adjudication_winner(
+    *,
+    selection_passes: bool,
+    confirmation_passes: bool | None,
+) -> str:
+    """Choose from selection, unless an independent confirmation was opened.
+
+    Development-evaluation is intentionally absent from this interface: it is
+    post-training paired-CI evidence and cannot affect checkpoints or winner.
+    """
+
+    passes = (
+        confirmation_passes if confirmation_passes is not None else selection_passes
+    )
+    return "candidate" if passes else "control"
+
+
 def model_payload(
     parent: dict[str, Any],
     state: dict[str, torch.Tensor],
@@ -187,6 +242,7 @@ def main() -> None:
         args.train_size,
         args.selection_size,
         args.confirmation_size,
+        args.development_evaluation_size,
         args.stochastic_batch_size,
         args.gradient_clip_norm,
         args.train_chunk_size,
@@ -202,6 +258,27 @@ def main() -> None:
         raise ValueError("minimum chi gain must lie in [0, 1)")
     if args.maximum_selection_tail_relative_degradation < 0:
         raise ValueError("tail degradation allowance must be nonnegative")
+    if args.data_seed is not None and args.data_seed < 0:
+        raise ValueError("data seed must be nonnegative")
+    if args.batch_plan_seed is not None and args.batch_plan_seed < 0:
+        raise ValueError("batch-plan seed must be nonnegative")
+    if args.development_evaluation and not args.development_only:
+        raise ValueError("development evaluation requires --development-only")
+    if args.development_only:
+        if (
+            args.confirmation_points is not None
+            or args.confirmation_pullbacks is not None
+        ):
+            raise ValueError(
+                "development-only runs must not receive confirmation paths"
+            )
+        if args.development_evaluation and (
+            args.development_evaluation_points is None
+            or args.development_evaluation_pullbacks is None
+        ):
+            raise ValueError("development-evaluation paths are required")
+    elif args.confirmation_points is None or args.confirmation_pullbacks is None:
+        raise ValueError("confirmation paths are required outside development-only")
     if args.device == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA was requested but is unavailable")
 
@@ -253,11 +330,7 @@ def main() -> None:
         ):
             raise ValueError("control and candidate feature contracts differ")
         exponents, whitening, precision = control_contract
-        dtype = (
-            torch.complex64
-            if precision == "complex64"
-            else torch.complex128
-        )
+        dtype = torch.complex64 if precision == "complex64" else torch.complex128
 
         specifications = {
             "fit": (
@@ -271,7 +344,13 @@ def main() -> None:
                 args.selection_size,
             ),
         }
-        if not args.development_only:
+        if args.development_evaluation:
+            specifications["development_evaluation"] = (
+                args.development_evaluation_points,
+                args.development_evaluation_pullbacks,
+                args.development_evaluation_size,
+            )
+        elif not args.development_only:
             specifications["confirmation"] = (
                 args.confirmation_points,
                 args.confirmation_pullbacks,
@@ -280,10 +359,12 @@ def main() -> None:
         excluded = load_excluded_indices(args.exclude_indices_file)
         arrays, indices = load_disjoint_splits(
             specifications,
-            seed=args.seed,
+            seed=args.seed if args.data_seed is None else args.data_seed,
             exclusions=excluded,
+            fixed_indices=load_fixed_split_indices(args.fixed_indices_file),
         )
-        np.savez_compressed(output_dir / "data_indices.npz", **indices)
+        indices_path = output_dir / "data_indices.npz"
+        np.savez_compressed(indices_path, **indices)
         datasets = {
             name: whiten_dataset(
                 make_dataset(
@@ -297,12 +378,38 @@ def main() -> None:
             )
             for name, rows in arrays.items()
         }
-        batch_plan = make_batch_plan(
-            count=datasets["fit"]["count"],
-            batch_size=args.stochastic_batch_size,
-            steps=args.steps,
-            seed=args.seed + 17,
-        )
+        if args.fixed_batch_plan_file is None:
+            batch_plan = make_batch_plan(
+                count=datasets["fit"]["count"],
+                batch_size=args.stochastic_batch_size,
+                steps=args.steps,
+                seed=(
+                    args.seed + 17
+                    if args.batch_plan_seed is None
+                    else args.batch_plan_seed
+                ),
+            )
+        else:
+            raw_plan = np.load(
+                args.fixed_batch_plan_file.expanduser().resolve(),
+                allow_pickle=False,
+            )
+            batch_plan = np.asarray(raw_plan)
+            expected_shape = (
+                args.steps,
+                min(datasets["fit"]["count"], args.stochastic_batch_size),
+            )
+            if batch_plan.shape != expected_shape or not np.issubdtype(
+                batch_plan.dtype, np.integer
+            ):
+                raise ValueError("fixed batch plan has the wrong shape or dtype")
+            batch_plan = np.asarray(batch_plan, dtype=np.int64)
+            if np.any((batch_plan < 0) | (batch_plan >= datasets["fit"]["count"])):
+                raise ValueError("fixed batch plan contains out-of-range rows")
+            if any(len(np.unique(row)) != len(row) for row in batch_plan):
+                raise ValueError("fixed batch plan repeats a row within a step")
+        batch_plan_path = output_dir / "batch_plan.npy"
+        np.save(batch_plan_path, batch_plan, allow_pickle=False)
 
         results: dict[str, Any] = {}
         payloads = {
@@ -337,6 +444,7 @@ def main() -> None:
                 maximum_tail_degradation=(
                     args.maximum_selection_tail_relative_degradation
                 ),
+                scheduler=args.scheduler,
             )
             audit = parameter_audit(result["model"], initial_state)
             polished = model_payload(
@@ -352,6 +460,7 @@ def main() -> None:
                 "model": result["model"],
                 "payload": polished,
                 "checkpoint": checkpoint,
+                "checkpoint_sha256": sha256_file(checkpoint),
                 "total_real_parameters": count,
                 "trainable_real_parameters": count,
                 "new_real_parameters_vs_control": 0,
@@ -385,28 +494,32 @@ def main() -> None:
             and tail_guard(
                 results["candidate"]["best_tail"],
                 results["control"]["best_tail"],
-                relative_degradation=(
-                    args.maximum_selection_tail_relative_degradation
-                ),
+                relative_degradation=(args.maximum_selection_tail_relative_degradation),
             )
         )
 
         confirmation_report = None
+        development_evaluation_report = None
         confirmation_passes = None
-        if not args.development_only:
+        evaluation_split = None
+        if args.development_evaluation:
+            evaluation_split = "development_evaluation"
+        elif not args.development_only:
+            evaluation_split = "confirmation"
+        if evaluation_split is not None:
             write_json(
                 status_path,
-                {"state": "running", "phase": "confirmation"},
+                {"state": "running", "phase": evaluation_split},
             )
-            confirmation_rows = {}
+            evaluation_rows = {}
             ratios = {}
             for role in ("control", "candidate"):
                 statistics, ratio, tail = metric_row(
                     results[role]["model"],
-                    datasets["confirmation"],
+                    datasets[evaluation_split],
                     chunk_size=args.eval_batch_size,
                 )
-                confirmation_rows[role] = {
+                evaluation_rows[role] = {
                     "statistics": statistics,
                     "tail": tail,
                 }
@@ -414,46 +527,45 @@ def main() -> None:
             paired = paired_improvement(
                 ratios["control"],
                 ratios["candidate"],
-                datasets["confirmation"]["weights_numpy"],
+                datasets[evaluation_split]["weights_numpy"],
             )
-            control_confirmation = confirmation_rows["control"]["statistics"]
-            candidate_confirmation = confirmation_rows["candidate"]["statistics"]
-            confirmation_passes = bool(
+            control_evaluation = evaluation_rows["control"]["statistics"]
+            candidate_evaluation = evaluation_rows["candidate"]["statistics"]
+            evaluation_passes = bool(
                 selection_passes
-                and candidate_confirmation["sigma_official_formula"]
-                < control_confirmation["sigma_official_formula"]
-                and candidate_confirmation["weighted_rms_abs_residual"]
-                < control_confirmation["weighted_rms_abs_residual"]
+                and candidate_evaluation["sigma_official_formula"]
+                < control_evaluation["sigma_official_formula"]
+                and candidate_evaluation["weighted_rms_abs_residual"]
+                < control_evaluation["weighted_rms_abs_residual"]
                 and paired["e2"]["ci95_low"] > 0
                 and paired["sigma"]["ci95_low"] > 0
-                and zero_nonpositive(candidate_confirmation)
+                and zero_nonpositive(candidate_evaluation)
                 and tail_guard(
-                    confirmation_rows["candidate"]["tail"],
-                    confirmation_rows["control"]["tail"],
+                    evaluation_rows["candidate"]["tail"],
+                    evaluation_rows["control"]["tail"],
                     relative_degradation=(
                         args.maximum_selection_tail_relative_degradation
                     ),
                 )
             )
-            confirmation_report = {
-                **confirmation_rows,
+            evaluation_report = {
+                **evaluation_rows,
                 "paired_improvement": paired,
-                "passes": confirmation_passes,
+                "passes": evaluation_passes,
+                "selection_or_checkpoint_role": "none",
             }
+            if evaluation_split == "confirmation":
+                confirmation_passes = evaluation_passes
+                confirmation_report = evaluation_report
+            else:
+                development_evaluation_report = evaluation_report
 
-        winner = (
-            "candidate"
-            if (
-                confirmation_passes
-                if confirmation_passes is not None
-                else selection_passes
-            )
-            else "control"
+        winner = adjudication_winner(
+            selection_passes=selection_passes,
+            confirmation_passes=confirmation_passes,
         )
         winner_path = output_dir / (
-            "accepted_candidate.pt"
-            if winner == "candidate"
-            else "control_retained.pt"
+            "accepted_candidate.pt" if winner == "candidate" else "control_retained.pt"
         )
         torch.save(results[winner]["payload"], winner_path)
 
@@ -467,11 +579,95 @@ def main() -> None:
         }
         report = {
             "schema": "generic-quintic-tree-joint-relaxation-v1",
+            "contract": {
+                "precision": control_contract[2],
+            },
             "configuration": {
                 **vars(args),
                 "control_checkpoint": str(control_path),
                 "candidate_checkpoint": str(candidate_path),
                 "output_dir": str(output_dir),
+            },
+            "source_checkpoint_sha256": {
+                "control": sha256_file(control_path),
+                "candidate": sha256_file(candidate_path),
+            },
+            "data": {
+                "indices": str(indices_path),
+                "indices_sha256": sha256_file(indices_path),
+                "fixed_indices_file": (
+                    None
+                    if args.fixed_indices_file is None
+                    else str(args.fixed_indices_file.expanduser().resolve())
+                ),
+                "fixed_indices_file_sha256": (
+                    None
+                    if args.fixed_indices_file is None
+                    else sha256_file(args.fixed_indices_file.expanduser().resolve())
+                ),
+                "input_sha256": {
+                    "train_points": sha256_file(
+                        args.train_points.expanduser().resolve()
+                    ),
+                    "train_pullbacks": sha256_file(
+                        args.train_pullbacks.expanduser().resolve()
+                    ),
+                    "selection_points": sha256_file(
+                        args.selection_points.expanduser().resolve()
+                    ),
+                    "selection_pullbacks": sha256_file(
+                        args.selection_pullbacks.expanduser().resolve()
+                    ),
+                    "development_evaluation_points": (
+                        None
+                        if args.development_evaluation_points is None
+                        else sha256_file(
+                            args.development_evaluation_points.expanduser().resolve()
+                        )
+                    ),
+                    "development_evaluation_pullbacks": (
+                        None
+                        if args.development_evaluation_pullbacks is None
+                        else sha256_file(
+                            args.development_evaluation_pullbacks.expanduser().resolve()
+                        )
+                    ),
+                    "confirmation_points": (
+                        None
+                        if args.confirmation_points is None
+                        else sha256_file(
+                            args.confirmation_points.expanduser().resolve()
+                        )
+                    ),
+                    "confirmation_pullbacks": (
+                        None
+                        if args.confirmation_pullbacks is None
+                        else sha256_file(
+                            args.confirmation_pullbacks.expanduser().resolve()
+                        )
+                    ),
+                },
+                "counts": {name: int(len(rows)) for name, rows in indices.items()},
+                "data_seed": (args.seed if args.data_seed is None else args.data_seed),
+            },
+            "batch_plan": {
+                "path": str(batch_plan_path),
+                "sha256": sha256_file(batch_plan_path),
+                "fixed_source_sha256": (
+                    None
+                    if args.fixed_batch_plan_file is None
+                    else sha256_file(args.fixed_batch_plan_file.expanduser().resolve())
+                ),
+                "seed": (
+                    args.seed + 17
+                    if args.batch_plan_seed is None
+                    else args.batch_plan_seed
+                ),
+                "steps": args.steps,
+                "batch_size": min(
+                    args.stochastic_batch_size,
+                    datasets["fit"]["count"],
+                ),
             },
             "results": serializable_results,
             "selection_comparison": {
@@ -479,6 +675,7 @@ def main() -> None:
                 "chi_gain": chi_gain,
                 "passes": selection_passes,
             },
+            "development_evaluation": development_evaluation_report,
             "confirmation": confirmation_report,
             "confirmation_passes": confirmation_passes,
             "winner": winner,

@@ -119,8 +119,7 @@ def adaptive_edge_groups(
         groups.append(("shared_leaf_edges", tuple(range(model.leaf_count))))
     else:
         groups.extend(
-            (f"leaf_edge_{leaf}", (leaf,))
-            for leaf in range(model.leaf_count)
+            (f"leaf_edge_{leaf}", (leaf,)) for leaf in range(model.leaf_count)
         )
     groups.extend(
         (f"internal_edge_{edge}", (edge,))
@@ -146,11 +145,7 @@ def select_named_groups(
             + "; available groups: "
             + ", ".join(sorted(available_names))
         )
-    return tuple(
-        (label, group)
-        for label, group in groups
-        if label in requested_names
-    )
+    return tuple((label, group) for label, group in groups if label in requested_names)
 
 
 def target_dimensions(
@@ -166,8 +161,7 @@ def target_dimensions(
 
 def state_to_cpu(model: torch.nn.Module) -> dict[str, torch.Tensor]:
     return {
-        key: value.detach().cpu().clone()
-        for key, value in model.state_dict().items()
+        key: value.detach().cpu().clone() for key, value in model.state_dict().items()
     }
 
 
@@ -238,18 +232,12 @@ def tree_new_parent_gradient_vector(
     rows = []
     for edge in expanded_edges:
         parent, side = parents[int(edge)]
-        parent_tensor = model.internal_tensors[
-            parent - model.leaf_count
-        ]
+        parent_tensor = model.internal_tensors[parent - model.leaf_count]
         gradient = parent_tensor.grad
         if gradient is None:
             raise RuntimeError("native loss did not populate a parent gradient")
         start = int(source_dimensions[int(edge)])
-        selected = (
-            gradient[:, start:, :]
-            if side == 0
-            else gradient[:, :, start:]
-        )
+        selected = gradient[:, start:, :] if side == 0 else gradient[:, :, start:]
         rows.append(selected.reshape(-1))
     if not rows:
         raise ValueError("at least one expanded edge is required")
@@ -272,9 +260,7 @@ def cross_sample_gradient_statistics(
         if denominator == 0.0
         else float(torch.real(torch.vdot(fit, validation))) / denominator
     )
-    stable_score = max(cosine, 0.0) * np.sqrt(
-        fit_norm * validation_norm
-    )
+    stable_score = max(cosine, 0.0) * np.sqrt(fit_norm * validation_norm)
     return {
         "fit_gradient_norm": fit_norm,
         "validation_gradient_norm": validation_norm,
@@ -317,10 +303,7 @@ def make_batch_plan(
     rng = np.random.default_rng(seed)
     active_size = min(count, batch_size)
     return np.stack(
-        [
-            rng.choice(count, size=active_size, replace=False)
-            for _ in range(steps)
-        ]
+        [rng.choice(count, size=active_size, replace=False) for _ in range(steps)]
     )
 
 
@@ -336,6 +319,7 @@ def train_arm(
     eval_batch_size: int,
     gradient_clip_norm: float,
     maximum_tail_degradation: float,
+    scheduler: str = "cosine",
 ) -> dict[str, Any]:
     initial_statistics, _, initial_tail = metric_row(
         model,
@@ -355,11 +339,20 @@ def train_arm(
     ]
     parameters = list(model.parameters())
     optimizer = torch.optim.Adam(parameters, lr=learning_rate)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer,
-        T_max=len(batch_plan),
-        eta_min=0.05 * learning_rate,
-    )
+    if scheduler == "cosine":
+        learning_rate_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=len(batch_plan),
+            eta_min=0.05 * learning_rate,
+        )
+    elif scheduler == "constant":
+        learning_rate_scheduler = torch.optim.lr_scheduler.ConstantLR(
+            optimizer,
+            factor=1.0,
+            total_iters=len(batch_plan),
+        )
+    else:
+        raise ValueError("scheduler must be cosine or constant")
     for step, indices in enumerate(batch_plan, start=1):
         active = dataset_subset(training, indices)
         optimizer.zero_grad(set_to_none=True)
@@ -374,7 +367,7 @@ def train_arm(
             gradient_clip_norm,
         )
         optimizer.step()
-        scheduler.step()
+        learning_rate_scheduler.step()
         if step % eval_every != 0 and step != len(batch_plan):
             continue
         statistics, _, candidate_tail = metric_row(
@@ -477,10 +470,7 @@ def main() -> None:
         )
         <= 0
         or not 0 <= args.minimum_relative_control_gain < 1
-        or (
-            args.proposal_screen_only
-            and args.proposal_seeds_per_group <= 1
-        )
+        or (args.proposal_screen_only and args.proposal_seeds_per_group <= 1)
         or (
             args.proposal_seeds_per_group > 1
             and (
@@ -490,8 +480,7 @@ def main() -> None:
                 )
                 <= 0
                 or (
-                    args.proposal_fit_size
-                    + args.proposal_validation_size
+                    args.proposal_fit_size + args.proposal_validation_size
                     > args.train_size
                 )
             )
@@ -512,9 +501,7 @@ def main() -> None:
     started = time.perf_counter()
 
     try:
-        initial_checkpoint_path = (
-            args.initial_checkpoint.expanduser().resolve()
-        )
+        initial_checkpoint_path = args.initial_checkpoint.expanduser().resolve()
         payload = torch.load(
             initial_checkpoint_path,
             map_location="cpu",
@@ -524,9 +511,7 @@ def main() -> None:
         if architecture != "compiled-tree":
             raise ValueError("initial checkpoint is not a compiled tree")
         precision = str(configuration["precision"])
-        dtype = (
-            torch.complex64 if precision == "complex64" else torch.complex128
-        )
+        dtype = torch.complex64 if precision == "complex64" else torch.complex128
         compiler_path = args.compiler_artifact.expanduser().resolve()
         compiler = np.load(compiler_path, allow_pickle=False)
         exponents = np.asarray(
@@ -596,9 +581,7 @@ def main() -> None:
         )
         audit_indices = np.arange(min(256, selection["count"]))
         audit = dataset_subset(selection, audit_indices)
-        audit["weights_numpy"] = np.asarray(
-            selection["weights_numpy"][audit_indices]
-        )
+        audit["weights_numpy"] = np.asarray(selection["weights_numpy"][audit_indices])
         _, audit_ratio, _ = metric_row(
             base_model,
             audit,
@@ -639,10 +622,7 @@ def main() -> None:
             proposal_rng = np.random.default_rng(args.seed + 30)
             proposal_indices = proposal_rng.choice(
                 training["count"],
-                size=(
-                    args.proposal_fit_size
-                    + args.proposal_validation_size
-                ),
+                size=(args.proposal_fit_size + args.proposal_validation_size),
                 replace=False,
             )
             proposal_fit = dataset_subset(
@@ -653,9 +633,7 @@ def main() -> None:
                 training,
                 proposal_indices[args.proposal_fit_size :],
             )
-            for group_index, (label, group, dimensions) in enumerate(
-                arm_specs[1:]
-            ):
+            for group_index, (label, group, dimensions) in enumerate(arm_specs[1:]):
                 write_json(
                     status_path,
                     {
@@ -691,14 +669,12 @@ def main() -> None:
                         expanded_edges=group,
                         chunk_size=args.train_chunk_size,
                     )
-                    validation_gradient, validation_loss = (
-                        native_tree_rank_gradient(
-                            proposal_model,
-                            proposal_validation,
-                            source_dimensions=source_dimensions,
-                            expanded_edges=group,
-                            chunk_size=args.train_chunk_size,
-                        )
+                    validation_gradient, validation_loss = native_tree_rank_gradient(
+                        proposal_model,
+                        proposal_validation,
+                        source_dimensions=source_dimensions,
+                        expanded_edges=group,
+                        chunk_size=args.train_chunk_size,
                     )
                     row = {
                         "seed": candidate_seed,
@@ -799,9 +775,7 @@ def main() -> None:
                     audit,
                     chunk_size=args.eval_batch_size,
                 )
-                embedding_audit["normalized_ratio_max_absolute"] = (
-                    exact_metric_error
-                )
+                embedding_audit["normalized_ratio_max_absolute"] = exact_metric_error
                 embedding_audits[label] = embedding_audit
                 write_json(
                     output_dir / "embedding_audit.json",
@@ -837,9 +811,7 @@ def main() -> None:
                 "exact_metric_error": exact_metric_error,
                 "embedding_audit": embedding_audit,
                 "activation_seed": (
-                    None
-                    if label == "control"
-                    else activation_seeds[label]
+                    None if label == "control" else activation_seeds[label]
                 ),
                 "trainable_real_parameter_count": (
                     result["model"].trainable_real_parameter_count
@@ -870,9 +842,7 @@ def main() -> None:
         for label, candidate in arms.items():
             if label == "control":
                 continue
-            control_chi = float(
-                control["best_statistics"]["weighted_rms_abs_residual"]
-            )
+            control_chi = float(control["best_statistics"]["weighted_rms_abs_residual"])
             candidate_chi = float(
                 candidate["best_statistics"]["weighted_rms_abs_residual"]
             )
@@ -1020,18 +990,14 @@ def main() -> None:
             and tail_guard(
                 candidate_tail,
                 confirmation_control_tail,
-                relative_degradation=(
-                    args.maximum_selection_tail_relative_degradation
-                ),
+                relative_degradation=(args.maximum_selection_tail_relative_degradation),
             )
             and paired_vs_control["e2"]["ci95_low"] > 0
             and paired_vs_control["sigma"]["ci95_low"] > 0
         )
 
         output_checkpoint_path = output_dir / (
-            "accepted.pt"
-            if confirmation_passes
-            else "diagnostic_rejected.pt"
+            "accepted.pt" if confirmation_passes else "diagnostic_rejected.pt"
         )
         final_configuration = dict(configuration)
         final_configuration.update(
@@ -1039,9 +1005,7 @@ def main() -> None:
                 "architecture": "compiled-tree",
                 "bond_dimension": max(final_dimensions),
                 "edge_dimensions": final_dimensions,
-                "adaptive_rank_round": int(
-                    configuration.get("adaptive_rank_round", 0)
-                )
+                "adaptive_rank_round": int(configuration.get("adaptive_rank_round", 0))
                 + (1 if chosen_label is not None else 0),
             }
         )
@@ -1050,20 +1014,14 @@ def main() -> None:
                 "schema": "generic-quintic-adaptive-compiled-positive-tree-v1",
                 "state_dict": state_to_cpu(final_model),
                 "configuration": final_configuration,
-                "parent_checkpoint_sha256": sha256_file(
-                    initial_checkpoint_path
-                ),
+                "parent_checkpoint_sha256": sha256_file(initial_checkpoint_path),
                 "teacher_runtime_dependency": False,
                 "confirmation_passes": confirmation_passes,
             },
             output_checkpoint_path,
         )
         serializable_arms = {
-            label: {
-                key: value
-                for key, value in result.items()
-                if key != "best_state"
-            }
+            label: {key: value for key, value in result.items() if key != "best_state"}
             for label, result in arms.items()
         }
         report = {

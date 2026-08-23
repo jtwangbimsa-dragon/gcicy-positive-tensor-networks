@@ -63,7 +63,7 @@ The default search gate requires:
 - identical registered full-relaxation budgets for candidate and control;
 - the identical minibatch plan for candidate and control;
 - reported before/after parameter counts, with rank-growth deltas equal to the
-  registered action and every local expansion adding at most 10,000 real
+  registered action and the complete v1 action adding at most 10,000 real
   parameters;
 - one byte-identical no-growth control evidence record per seed across all
   candidates (checkpoint, metrics, budget, minibatch plan, and parameter
@@ -153,3 +153,83 @@ The checked-in JSON Schema is
 Runtime validation is stricter than JSON Schema where a constraint relates two
 fields, such as `source_dimension < target_dimension <= structural_maximum` or
 shared-leaf growth being exactly one row.
+
+## Executable Round 1 bridge
+
+The first numerical bridge is intentionally smaller than the general action
+language. It accepts only internal edge 6 growth `25 -> 39` from the pinned
+leaf-rank10 checkpoint, whose exact structural increment is 9,800 real
+parameters. The 10,000 limit is a **total-action cap in bridge v1**. The
+historical adaptive worker's option with the same numeric value is a per-block
+optimizer limit; it does not authorize larger actions such as `25 -> 75`
+(35,000 new real parameters). A wider capacity envelope must be an explicit
+v2 protocol.
+
+The bridge applies the preregistered deterministic `partition_seed` to shuffle
+the locked 35,000 native indices, then maps 30,000 rows to fit and 5,000 rows
+to selection. This avoids turning the controller's canonical sorted storage
+order into a row-number-biased split. The separately locked 5,000 indices
+address the development-evaluation pool. That pool is evaluated only after
+both matched-relax arms finish and supplies paired confidence intervals only;
+it cannot affect optimization, early stopping, checkpoint selection, or the
+worker winner. Historical confirmation paths are rejected.
+
+The staged CLI is create-only and resumable across completed seed/stage pairs.
+On a fresh campaign, controller initialization and fixed-action registration
+must precede the shown `prepare` command; the one-command `execute` path below
+performs those steps automatically:
+
+```bash
+python scripts/run_quintic_architecture_round1_bridge.py prepare \
+  --campaign-run-root /scratch/quintic-architecture-auto-v1 \
+  --candidate-id edge6-rank39 \
+  --output-root /scratch/quintic-edge6-round1 \
+  --baseline-checkpoint 202608231=/path/to/pinned-parent.pt \
+  --baseline-checkpoint 202608232=/path/to/pinned-parent.pt \
+  --baseline-checkpoint 202608233=/path/to/pinned-parent.pt
+
+python scripts/run_quintic_architecture_round1_bridge.py run \
+  --bridge-root /scratch/quintic-edge6-round1
+
+python scripts/run_quintic_architecture_round1_bridge.py normalize \
+  --bridge-root /scratch/quintic-edge6-round1
+```
+
+For an unattended GPU service, the fixed `execute` command performs protocol
+initialization, registers the sole edge6 action, prepares or resumes all three
+seeds, normalizes the evidence, records it, and adjudicates Round 1:
+
+```bash
+python scripts/run_quintic_architecture_round1_bridge.py execute \
+  --protocol experiments/protocols/generic_quintic_architecture_round1_edge6_v1.json \
+  --wait-for-user-unit preceding-gpu-campaign.service \
+  --campaign-run-root /scratch/quintic-architecture-auto-v1 \
+  --output-root /scratch/quintic-edge6-round1 \
+  --baseline-checkpoint 202608231=/path/to/pinned-parent.pt \
+  --baseline-checkpoint 202608232=/path/to/pinned-parent.pt \
+  --baseline-checkpoint 202608233=/path/to/pinned-parent.pt
+```
+
+When a predecessor GPU campaign is named, `execute` waits for that exact user
+service and proceeds only after systemd reports `Result=success` and exit status
+zero. A failed, missing, or uninspectable predecessor aborts before Round 1.
+This guard prevents two campaigns from silently sharing the same GPU.
+
+An exact retry returns an existing adjudication or resumes at the first
+unpublished stage. A partially created worker directory is never overwritten;
+it remains a fail-closed diagnostic artifact.
+
+`prepare` requires a clean tracked Git worktree and binds the commit, worker
+and dependency-source hashes, baseline checkpoint/source-report hashes, every
+input-pool hash, canonical index-array value hashes, and per-seed canonical
+batch-plan hashes. It also records Python, NumPy, PyTorch/CUDA-build, GPU, and
+driver metadata. `run` uses fixed argument construction and `shell=False`;
+the action has no command, environment, or worker escape hatch. `normalize`
+revalidates worker configuration and raw report hashes and emits controller
+search evidence without inventing missing metrics or confidence intervals.
+
+The three promotion seeds in this bridge start from the same pinned upstream
+checkpoint. They are independent channel-activation/optimization replicas with
+separate optimizer seeds and matched batch plans, not three independently
+trained upstream parent models. Any paper-level claim must preserve that
+distinction and use a separately frozen final evaluation workflow.
