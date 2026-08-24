@@ -29,6 +29,38 @@ def _sha(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
 
+def _realistic_parent_payload(*, data_contract: dict) -> dict:
+    import torch
+
+    state_dict = {
+        "physical_dictionary": torch.zeros((121, 11, 11), dtype=torch.complex64),
+        "coefficient_cores.0": torch.zeros((1, 14, 121), dtype=torch.complex64),
+        **{
+            f"coefficient_cores.{index}": torch.zeros(
+                (14, 14, 121), dtype=torch.complex64
+            )
+            for index in range(1, 19)
+        },
+        "coefficient_cores.19": torch.zeros((14, 1, 121), dtype=torch.complex64),
+    }
+    return {
+        "schema": "type11-positive-tensor-network-v1",
+        "adapter": probe.ADAPTER,
+        "model_seed": probe.MODEL_SEED,
+        "site_count": probe.SITE_COUNT,
+        "bond_dimension": probe.BOND_DIMENSION,
+        "architecture": "shared_local_dictionary",
+        "physical_dictionary_rank": probe.PHYSICAL_DICTIONARY_RANK,
+        "trainable_physical_dictionary": False,
+        "physical_dictionary_gauge": "fixed",
+        "precision": probe.PRECISION,
+        "source_artifact_sha256": data_contract["source_artifact_sha256"],
+        "train_common_pool_sha256": data_contract["train_pool_sha256"],
+        "validation_common_pool_sha256": data_contract["selection_pool_sha256"],
+        "state_dict": state_dict,
+    }
+
+
 @pytest.fixture
 def environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
     protocol_path = tmp_path / "x21-protocol.json"
@@ -157,6 +189,46 @@ def _prepare(environment: dict, tmp_path: Path, probe_id: str) -> dict:
         repository_root=ROOT,
         runtime=environment["runtime"],
     )
+
+
+def test_parent_contract_derives_parameter_count_from_legacy_state_dict(
+    tmp_path, monkeypatch
+):
+    data_contract = {
+        "source_artifact_sha256": _sha("source"),
+        "train_pool_sha256": _sha("train"),
+        "selection_pool_sha256": _sha("selection"),
+    }
+    payload = _realistic_parent_payload(data_contract=data_contract)
+    assert "trainable_real_parameter_count" not in payload
+    monkeypatch.setattr(probe, "_load_torch_object", lambda *_args, **_kwargs: payload)
+    contract = probe._parent_contract(
+        tmp_path / "legacy-model.pt", protocol={"data_contract": data_contract}
+    )
+    assert contract["trainable_real_parameter_count"] == 860_552
+    assert contract["coefficient_core_count"] == 20
+    assert contract["physical_dictionary_shape"] == [121, 11, 11]
+
+
+def test_parent_contract_rejects_structurally_wrong_k20_d14_state(
+    tmp_path, monkeypatch
+):
+    data_contract = {
+        "source_artifact_sha256": _sha("source"),
+        "train_pool_sha256": _sha("train"),
+        "selection_pool_sha256": _sha("selection"),
+    }
+    payload = _realistic_parent_payload(data_contract=data_contract)
+    import torch
+
+    payload["state_dict"]["coefficient_cores.7"] = torch.zeros(
+        (14, 13, 121), dtype=torch.complex64
+    )
+    monkeypatch.setattr(probe, "_load_torch_object", lambda *_args, **_kwargs: payload)
+    with pytest.raises(X21HostGPUProbeError, match="coefficient_cores.7"):
+        probe._parent_contract(
+            tmp_path / "wrong-model.pt", protocol={"data_contract": data_contract}
+        )
 
 
 def _worker_result(plan: dict, **overrides) -> dict:

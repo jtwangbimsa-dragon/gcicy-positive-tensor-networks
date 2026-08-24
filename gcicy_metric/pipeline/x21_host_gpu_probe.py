@@ -393,6 +393,72 @@ def _load_torch_object(path: Path, *, role: str) -> dict[str, Any]:
     return value
 
 
+def _coefficient_state_contract(payload: Mapping[str, Any]) -> dict[str, Any]:
+    state_dict = payload.get("state_dict")
+    _require(isinstance(state_dict, Mapping), "parent model has no state dictionary")
+    coefficient_names = tuple(
+        f"coefficient_cores.{index}" for index in range(SITE_COUNT)
+    )
+    present_coefficient_names = {
+        str(name) for name in state_dict if str(name).startswith("coefficient_cores.")
+    }
+    _require(
+        present_coefficient_names == set(coefficient_names),
+        "parent model coefficient-core inventory differs from k=20",
+    )
+    expected_shapes = (
+        (1, BOND_DIMENSION, PHYSICAL_DICTIONARY_RANK),
+        *((BOND_DIMENSION, BOND_DIMENSION, PHYSICAL_DICTIONARY_RANK),)
+        * (SITE_COUNT - 2),
+        (BOND_DIMENSION, 1, PHYSICAL_DICTIONARY_RANK),
+    )
+    complex_parameters = 0
+    for name, expected_shape in zip(coefficient_names, expected_shapes, strict=True):
+        tensor = state_dict[name]
+        shape = tuple(int(dimension) for dimension in getattr(tensor, "shape", ()))
+        _require(shape == expected_shape, f"parent model {name} has the wrong shape")
+        _require(
+            str(getattr(tensor, "dtype", "")) == "torch.complex64",
+            f"parent model {name} is not complex64",
+        )
+        complex_parameters += math.prod(shape)
+
+    dictionary_dimension = math.isqrt(PHYSICAL_DICTIONARY_RANK)
+    _require(
+        dictionary_dimension**2 == PHYSICAL_DICTIONARY_RANK,
+        "physical dictionary rank is not square",
+    )
+    dictionary = state_dict.get("physical_dictionary")
+    dictionary_shape = tuple(
+        int(dimension) for dimension in getattr(dictionary, "shape", ())
+    )
+    _require(
+        dictionary_shape
+        == (
+            PHYSICAL_DICTIONARY_RANK,
+            dictionary_dimension,
+            dictionary_dimension,
+        ),
+        "parent model physical dictionary has the wrong shape",
+    )
+    _require(
+        str(getattr(dictionary, "dtype", "")) == "torch.complex64",
+        "parent model physical dictionary is not complex64",
+    )
+    trainable_real_parameters = 2 * complex_parameters
+    _require(
+        trainable_real_parameters == TRAINABLE_REAL_PARAMETERS,
+        "parent model structural trainable parameter count differs from 860552",
+    )
+    return {
+        "coefficient_core_count": len(coefficient_names),
+        "coefficient_core_shapes": [list(shape) for shape in expected_shapes],
+        "physical_dictionary_shape": list(dictionary_shape),
+        "trainable_real_parameter_count": trainable_real_parameters,
+        "state_precision": PRECISION,
+    }
+
+
 def _parent_contract(path: Path, *, protocol: Mapping[str, Any]) -> dict[str, Any]:
     payload = _load_torch_object(path, role="parent model")
     expected = {
@@ -405,7 +471,6 @@ def _parent_contract(path: Path, *, protocol: Mapping[str, Any]) -> dict[str, An
         "physical_dictionary_rank": PHYSICAL_DICTIONARY_RANK,
         "trainable_physical_dictionary": False,
         "physical_dictionary_gauge": "fixed",
-        "trainable_real_parameter_count": TRAINABLE_REAL_PARAMETERS,
         "precision": PRECISION,
     }
     for field, expected_value in expected.items():
@@ -413,6 +478,7 @@ def _parent_contract(path: Path, *, protocol: Mapping[str, Any]) -> dict[str, An
             payload.get(field) == expected_value,
             f"parent model {field} differs from {expected_value!r}",
         )
+    coefficient_state = _coefficient_state_contract(payload)
     data = protocol["data_contract"]
     frozen = {
         "source_artifact_sha256": data["source_artifact_sha256"],
@@ -424,7 +490,7 @@ def _parent_contract(path: Path, *, protocol: Mapping[str, Any]) -> dict[str, An
             payload.get(field) == expected_value,
             f"parent model {field} differs from the protocol",
         )
-    return {**expected, **frozen}
+    return {**expected, **coefficient_state, **frozen}
 
 
 def _runtime(value: Mapping[str, Any]) -> dict[str, Any]:
