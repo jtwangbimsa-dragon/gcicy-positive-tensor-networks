@@ -249,6 +249,7 @@ def test_prepared_plan_has_three_seeds_separate_rngs_and_fixed_worker_argv(
         repository_root=Path(__file__).resolve().parents[1],
     )
     assert plan["runtime"] == runtime
+    assert plan["rank_activation_scale"] == 1.0
     assert plan["runtime_environment"]["gpu"] is None
     assert plan["runtime_environment"]["numpy"] == np.__version__
     assert plan["runtime_environment"]["torch"]
@@ -261,11 +262,18 @@ def test_prepared_plan_has_three_seeds_separate_rngs_and_fixed_worker_argv(
         assert "--sweeps" in local and local[local.index("--sweeps") + 1] == "2"
         assert "--epochs-per-block" in local
         assert local[local.index("--epochs-per-block") + 1] == "200"
+        assert local[local.index("--rank-activation-scale") + 1] == "1.0"
         assert "--scheduler" in matched
         assert matched[matched.index("--scheduler") + 1] == "cosine"
         assert "--development-evaluation" in matched
         assert not any("confirmation" in value.lower() for value in local + matched)
         assert local[0] == sys.executable and matched[0] == sys.executable
+    scaled_local = bridge._stage_argv(
+        {**plan, "rank_activation_scale": 0.25}, plan["seeds"][0], "local_activate"
+    )
+    assert scaled_local[scaled_local.index("--rank-activation-scale") + 1] == "0.25"
+    with pytest.raises(AutoResearchError, match="not preregistered"):
+        bridge._rank_activation_scale(1.01)
 
 
 def test_adaptive_development_mode_rejects_confirmation_paths(tmp_path, monkeypatch):

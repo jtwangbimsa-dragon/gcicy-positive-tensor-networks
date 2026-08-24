@@ -54,6 +54,11 @@ ROUND1_TARGET_DIMENSION = 39
 ROUND1_STRUCTURAL_MAXIMUM = 100
 ROUND1_NEW_REAL_PARAMETERS = 9_800
 ROUND1_TOTAL_ACTION_REAL_PARAMETER_CAP = 10_000
+DEFAULT_RANK_ACTIVATION_SCALE = 1.0
+REGISTERED_RANK_ACTIVATION_SCALES = {
+    1.0: "edge6-rank39",
+    0.25: "edge6-rank39-scale025",
+}
 ROUND1_CONTROL_REAL_PARAMETERS = 121_750
 ROUND1_CANDIDATE_REAL_PARAMETERS = 131_550
 ROUND1_TRAIN_INDEX_COUNT = 35_000
@@ -122,6 +127,13 @@ def _finite_nonnegative(value: Any, *, name: str) -> float:
         raise AutoResearchError(f"{name} must be numeric") from error
     if not math.isfinite(result) or result < 0:
         raise AutoResearchError(f"{name} must be finite and nonnegative")
+    return result
+
+
+def _rank_activation_scale(value: Any) -> float:
+    result = _finite_positive(value, name="rank_activation_scale")
+    if result not in REGISTERED_RANK_ACTIVATION_SCALES:
+        raise AutoResearchError("rank_activation_scale is not preregistered")
     return result
 
 
@@ -515,6 +527,7 @@ def prepare_round1_bridge(
     baseline_checkpoints: Mapping[int, Path],
     runtime: Mapping[str, Any],
     repository_root: Path,
+    rank_activation_scale: float = DEFAULT_RANK_ACTIVATION_SCALE,
 ) -> dict[str, Any]:
     """Create or exactly resume a fully bound three-seed execution plan."""
 
@@ -523,6 +536,11 @@ def prepare_round1_bridge(
     store = CampaignStore(campaign_run_root)
     protocol, controller_indices, action = _registered_action(store, candidate_id)
     runtime_row = _validate_runtime(runtime)
+    rank_activation_scale = _rank_activation_scale(rank_activation_scale)
+    _require(
+        candidate_id == REGISTERED_RANK_ACTIVATION_SCALES[rank_activation_scale],
+        "candidate_id does not match the preregistered activation scale",
+    )
     expected_seeds = protocol["promotion_seeds"]
     _require(
         set(baseline_checkpoints) == set(expected_seeds),
@@ -623,6 +641,7 @@ def prepare_round1_bridge(
         "budgets": protocol["budgets"],
         "thresholds": protocol["thresholds"],
         "runtime": runtime_row,
+        "rank_activation_scale": rank_activation_scale,
         "python": {"path": sys.executable, "version": platform.python_version()},
         "runtime_environment": _runtime_environment(runtime_row["device"]),
         "seeds": seed_rows,
@@ -696,6 +715,10 @@ def _stage_argv(
             *common_data,
             *_flag("--output-dir", seed_row["local_output_dir"]),
             *_flag("--target-edge", "6:39"),
+            *_flag(
+                "--rank-activation-scale",
+                plan.get("rank_activation_scale", DEFAULT_RANK_ACTIVATION_SCALE),
+            ),
             "--orthogonalize-new-outputs",
             "--expansion-only",
             "--defer-block-acceptance",
@@ -1002,7 +1025,11 @@ def normalize_round1_bridge(root: Path) -> dict[str, Any]:
                 "fixed_indices_file": str(fixed_indices),
                 "output_dir": str(local_dir),
                 "target_edge": ["6:39"],
-                "rank_activation_scale": 1.0,
+                "rank_activation_scale": _rank_activation_scale(
+                    plan.get(
+                        "rank_activation_scale", DEFAULT_RANK_ACTIVATION_SCALE
+                    )
+                ),
                 "orthogonalize_new_outputs": True,
                 "real_parameter_limit": ROUND1_TOTAL_ACTION_REAL_PARAMETER_CAP,
                 "expansion_only": True,
@@ -1319,6 +1346,8 @@ def normalize_round1_bridge(root: Path) -> dict[str, Any]:
 __all__ = [
     "BRIDGE_LEDGER_SCHEMA",
     "BRIDGE_PLAN_SCHEMA",
+    "DEFAULT_RANK_ACTIVATION_SCALE",
+    "REGISTERED_RANK_ACTIVATION_SCALES",
     "ROUND1_BASELINE_SHA256",
     "ROUND1_TOTAL_ACTION_REAL_PARAMETER_CAP",
     "canonical_array_value_sha256",

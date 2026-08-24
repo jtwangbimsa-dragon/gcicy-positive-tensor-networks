@@ -687,6 +687,7 @@ def execute_round1(args: argparse.Namespace) -> dict[str, object]:
                 baseline_checkpoints=_baselines(args),
                 runtime=_runtime(args),
                 repository_root=ROOT,
+                rank_activation_scale=getattr(args, "rank_activation_scale", 1.0),
             )
             workflow_guard = (
                 completed_workflow_guard(
@@ -755,6 +756,12 @@ def _add_execution_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--feature-batch-size", type=int, default=512)
     parser.add_argument("--eval-batch-size", type=int, default=256)
     parser.add_argument("--early-stopping-evaluations", type=int, default=6)
+    parser.add_argument(
+        "--rank-activation-scale",
+        type=float,
+        default=1.0,
+        help="registered relative activation of newly added edge channels",
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -804,6 +811,7 @@ def main() -> None:
             baseline_checkpoints=_baselines(args),
             runtime=_runtime(args),
             repository_root=ROOT,
+            rank_activation_scale=getattr(args, "rank_activation_scale", 1.0),
         )
     elif args.command == "execute":
         result = execute_round1(args)
