@@ -108,6 +108,7 @@ SOURCE_DEPENDENCIES = (
     "gcicy_metric/pipeline/positive_tensor_network.py",
     "gcicy_metric/pipeline/common_point_pool.py",
     "gcicy_metric/pipeline/tail.py",
+    "gcicy_metric/pipeline/safe_torch_load.py",
 )
 _FORBIDDEN_DATA_TOKENS = ("blind", "confirmation", "holdout")
 GPU_LOCK_ROOT = Path("/tmp/gcicy-tn-gpu-locks")

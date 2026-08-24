@@ -20,6 +20,7 @@ from gcicy_metric.pipeline import (  # noqa: E402
     get_adapter,
     positive_tensor_network_from_artifact_payload,
 )
+from gcicy_metric.pipeline.safe_torch_load import safe_torch_load  # noqa: E402
 from scripts.train_type11_positive_tensor_network import (  # noqa: E402
     evaluate_log_eta_and_minimum_eigenvalue_arrays,
     evaluate_model,
@@ -31,7 +32,9 @@ from scripts.train_type11_positive_tensor_network import (  # noqa: E402
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", type=Path, required=True)
-    parser.add_argument("--adapter", help="registered adapter key; defaults to model metadata")
+    parser.add_argument(
+        "--adapter", help="registered adapter key; defaults to model metadata"
+    )
     parser.add_argument("--source-artifact", type=Path)
     parser.add_argument("--teacher-artifact", type=Path)
     parser.add_argument("--model-seed", type=int)
@@ -91,12 +94,10 @@ def main() -> None:
         raise SystemExit("CUDA was requested but is unavailable")
 
     model_path = args.model.expanduser().resolve()
-    payload = torch.load(model_path, map_location="cpu", weights_only=False)
+    payload = safe_torch_load(model_path, map_location="cpu")
     if payload.get("schema") != "type11-positive-tensor-network-v1":
         raise ValueError("unrecognized positive tensor-network artifact")
-    adapter_key = args.adapter or payload.get(
-        "adapter", "p4p1_type11_hirzebruch_x3"
-    )
+    adapter_key = args.adapter or payload.get("adapter", "p4p1_type11_hirzebruch_x3")
     model_seed = (
         args.model_seed
         if args.model_seed is not None
@@ -127,9 +128,7 @@ def main() -> None:
         else payload.get("teacher_artifact")
     )
     teacher_path = (
-        None
-        if teacher_value is None
-        else Path(teacher_value).expanduser().resolve()
+        None if teacher_value is None else Path(teacher_value).expanduser().resolve()
     )
     if sha256_file(source_path) != payload["source_artifact_sha256"]:
         raise ValueError("source artifact SHA256 does not match the saved model")
@@ -183,9 +182,7 @@ def main() -> None:
             dtype=real_dtype,
             device=device,
         )
-        fixed_log_kappa_source = payload.get(
-            "fixed_log_kappa_source", "saved_model"
-        )
+        fixed_log_kappa_source = payload.get("fixed_log_kappa_source", "saved_model")
     elif dataset["teacher_log_eta"] is not None:
         fixed_log_kappa = weighted_log_mean_exp(
             dataset["teacher_log_eta"],
@@ -213,9 +210,7 @@ def main() -> None:
             "schema": np.asarray("type11-positive-tensor-network-blind-arrays-v1"),
             "adapter": np.asarray(adapter.key),
             "model_log_eta": np.asarray(model_log_eta),
-            "metric_minimum_eigenvalues": np.asarray(
-                model_minimum_eigenvalues
-            ),
+            "metric_minimum_eigenvalues": np.asarray(model_minimum_eigenvalues),
             "importance_weights": np.asarray(dataset["weights_numpy"]),
             "sampling_cluster_ids": np.asarray(dataset["sampling_cluster_ids"]),
             **point_payload,
@@ -243,9 +238,7 @@ def main() -> None:
         "point_shards": dataset["shards"],
         "common_pool": dataset["common_pool"],
         "common_pool_sha256": dataset["common_pool_sha256"],
-        "importance_effective_sample_size": dataset[
-            "importance_effective_sample_size"
-        ],
+        "importance_effective_sample_size": dataset["importance_effective_sample_size"],
         "site_count": model.site_count,
         "bond_dimension": model.bond_dimension,
         "architecture": model.architecture,

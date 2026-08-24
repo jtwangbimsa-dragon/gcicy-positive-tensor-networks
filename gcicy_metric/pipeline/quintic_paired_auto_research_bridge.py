@@ -43,6 +43,7 @@ from .quintic_architecture_round1_bridge import (
     BRIDGE_PLAN_SCHEMA as ROUND1_BRIDGE_PLAN_SCHEMA,
     canonical_array_value_sha256,
 )
+from .safe_torch_load import safe_torch_load
 
 
 PAIRED_PLAN_SCHEMA = "gcicy-quintic-paired-auto-research-plan-v2"
@@ -78,6 +79,7 @@ SOURCE_RELATIVE_PATHS = (
     "gcicy_metric/pipeline/quintic_architecture_multi_round.py",
     "gcicy_metric/pipeline/quintic_architecture_round1_bridge.py",
     "gcicy_metric/pipeline/quintic_paired_auto_research_bridge.py",
+    "gcicy_metric/pipeline/safe_torch_load.py",
     "scripts/evaluate_generic_quintic_h4_architecture_arms.py",
     "scripts/refine_generic_quintic_compiled_tree_native_gn.py",
     "scripts/run_quintic_paired_auto_research_bridge.py",
@@ -277,12 +279,10 @@ def _source_contract(repository_root: Path) -> dict[str, Any]:
 
 
 def _checkpoint_precision(path: Path) -> str:
-    """Read the trusted scientific parent contract on CPU before GPU launch."""
+    """Read the registered scientific parent contract on CPU before GPU launch."""
 
     try:
-        import torch
-
-        payload = torch.load(path, map_location="cpu", weights_only=False)
+        payload = safe_torch_load(path, map_location="cpu")
         precision = str(payload["configuration"]["precision"])
     except (ImportError, KeyError, TypeError, ValueError, OSError) as error:
         raise AutoResearchError("cannot read parent checkpoint precision") from error

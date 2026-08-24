@@ -18,6 +18,7 @@ import tempfile
 from typing import Any, Mapping, Sequence
 
 from .experiment_workflow import sha256_file
+from .safe_torch_load import safe_torch_load
 from .x21_auto_research import (
     BASELINE_COMPLETION_SCHEMA,
     FAMILY_SCHEMA,
@@ -113,12 +114,10 @@ def _integer(value: Any, *, role: str, minimum: int | None = None) -> int:
 
 
 def _load_torch_payload(path: Path, *, role: str) -> dict[str, Any]:
-    """Load a trusted, local training artifact on CPU for structural checks."""
+    """Load a registered local artifact on CPU for structural checks."""
 
     try:
-        import torch
-
-        value = torch.load(path, map_location="cpu", weights_only=False)
+        value = safe_torch_load(path, map_location="cpu")
     except (OSError, RuntimeError, ValueError, TypeError, ModuleNotFoundError) as exc:
         raise _error(f"could not load {role} {path} on CPU: {exc}") from exc
     if not isinstance(value, dict):

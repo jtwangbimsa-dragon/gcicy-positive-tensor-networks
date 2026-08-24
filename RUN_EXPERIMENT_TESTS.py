@@ -26,6 +26,7 @@ TESTS = (
     "tests/test_quintic_architecture_round1_bridge.py",
     "tests/test_compare_generic_quintic_tree_joint_relaxation.py",
     "tests/test_host_stability_gate.py",
+    "tests/test_safe_torch_load.py",
     "tests/test_quintic_architecture_multi_round.py",
     "tests/test_quintic_host_gpu_probe.py",
     "tests/test_quintic_paired_auto_research_bridge.py",

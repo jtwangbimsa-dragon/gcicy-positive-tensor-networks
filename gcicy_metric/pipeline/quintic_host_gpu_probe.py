@@ -42,6 +42,7 @@ from .quintic_paired_auto_research_bridge import (
     PRECISION,
     _validate_round1_data_contract,
 )
+from .safe_torch_load import safe_torch_load
 
 
 PLAN_SCHEMA = "gcicy-quintic-host-gpu-probe-plan-v1"
@@ -70,6 +71,7 @@ SOURCE_RELATIVE_PATHS = (
     "gcicy_metric/pipeline/quintic_architecture_round1_bridge.py",
     "gcicy_metric/pipeline/quintic_host_gpu_probe.py",
     "gcicy_metric/pipeline/quintic_paired_auto_research_bridge.py",
+    "gcicy_metric/pipeline/safe_torch_load.py",
     "scripts/evaluate_generic_quintic_h4_architecture_arms.py",
     "scripts/refine_generic_quintic_compiled_tree_native_gn.py",
     "scripts/run_quintic_host_gpu_probe.py",
@@ -307,13 +309,11 @@ def _runtime_environment() -> dict[str, Any]:
 
 def _checkpoint_contract(path: Path) -> dict[str, Any]:
     try:
-        import torch
-
         from scripts.evaluate_generic_quintic_h4_architecture_arms import (
             infer_architecture,
         )
 
-        payload = torch.load(path, map_location="cpu", weights_only=False)
+        payload = safe_torch_load(path, map_location="cpu")
         precision = str(payload["configuration"]["precision"])
         architecture = infer_architecture(payload)
         teacher_free = payload.get("teacher_runtime_dependency") is False
@@ -749,7 +749,7 @@ def execute_cuda_worker(root: Path) -> dict[str, Any]:
     started_utc = _utc_now()
 
     parent_path = Path(plan["parent_checkpoint"]["path"])
-    payload = torch.load(parent_path, map_location="cpu", weights_only=False)
+    payload = safe_torch_load(parent_path, map_location="cpu")
     model = build_checkpoint_model(payload, device=device)
     model.train()
     exponents = np.asarray(payload["configuration"]["exponents"], dtype=np.int64)

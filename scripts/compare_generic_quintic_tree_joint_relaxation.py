@@ -20,6 +20,7 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from gcicy_metric.pipeline.safe_torch_load import safe_torch_load  # noqa: E402
 from scripts.evaluate_generic_quintic_h4_architecture_arms import (  # noqa: E402
     build_checkpoint_model,
     infer_architecture,
@@ -454,16 +455,8 @@ def main() -> None:
     try:
         control_path = args.control_checkpoint.expanduser().resolve()
         candidate_path = args.candidate_checkpoint.expanduser().resolve()
-        control_payload = torch.load(
-            control_path,
-            map_location="cpu",
-            weights_only=False,
-        )
-        candidate_payload = torch.load(
-            candidate_path,
-            map_location="cpu",
-            weights_only=False,
-        )
+        control_payload = safe_torch_load(control_path, map_location="cpu")
+        candidate_payload = safe_torch_load(candidate_path, map_location="cpu")
         if (
             infer_architecture(control_payload) != "compiled-tree"
             or infer_architecture(candidate_payload) != "compiled-tree"

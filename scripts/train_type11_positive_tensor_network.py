@@ -30,6 +30,7 @@ from gcicy_metric.pipeline.risk import (  # noqa: E402
     smooth_upper_log_ratio_excess_torch,
     weighted_cvar_torch,
 )
+from gcicy_metric.pipeline.safe_torch_load import safe_torch_load  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -357,8 +358,7 @@ def resumed_training_termination(
 
     if (
         early_stopping_patience > 0
-        and payload["evaluations_since_material_improvement"]
-        >= early_stopping_patience
+        and payload["evaluations_since_material_improvement"] >= early_stopping_patience
     ):
         return "validation_plateau"
     if payload["next_epoch"] > requested_epochs:
@@ -550,9 +550,7 @@ def restore_training_checkpoint_state(
             raise ValueError(
                 "resume checkpoint CUDA RNG device does not match the generator"
             )
-        torch.cuda.set_rng_state(
-            cuda_rng_state.detach().cpu(), device=generator_device
-        )
+        torch.cuda.set_rng_state(cuda_rng_state.detach().cpu(), device=generator_device)
     elif payload["cuda_rng_device"] is not None:
         raise ValueError("resume checkpoint has a CUDA device without CUDA RNG state")
 
@@ -731,15 +729,11 @@ def dense_h_potential_and_metric(values, derivatives, h_matrix, normalization: f
     import torch
 
     h_values = torch.einsum("ab,nb->na", h_matrix, values)
-    denominator = torch.real(
-        torch.einsum("na,na->n", torch.conj(values), h_values)
-    )
+    denominator = torch.real(torch.einsum("na,na->n", torch.conj(values), h_values))
     if not bool(torch.all(denominator > 0)):
         raise FloatingPointError("teacher section norm is not positive")
     h_derivatives = torch.einsum("ab,nbj->naj", h_matrix, derivatives)
-    first = torch.einsum(
-        "nmi,nmj->nij", torch.conj(derivatives), h_derivatives
-    )
+    first = torch.einsum("nmi,nmj->nij", torch.conj(derivatives), h_derivatives)
     gradient = torch.einsum("nm,nmj->nj", torch.conj(values), h_derivatives)
     metric = first / denominator[:, None, None]
     metric -= (
@@ -854,16 +848,20 @@ def prepare_dataset(
         device=device,
     )
     weights_numpy = np.asarray(
-        adapter.importance_weights(points)
-        if common_pool is None
-        else common_pool.importance_weights,
+        (
+            adapter.importance_weights(points)
+            if common_pool is None
+            else common_pool.importance_weights
+        ),
         dtype=np.float64,
     )
     weights_numpy /= np.sum(weights_numpy)
     log_omega_numpy = np.asarray(
-        [adapter.holomorphic_volume_log_density(point) for point in points]
-        if common_pool is None
-        else common_pool.holomorphic_volume_log_density,
+        (
+            [adapter.holomorphic_volume_log_density(point) for point in points]
+            if common_pool is None
+            else common_pool.holomorphic_volume_log_density
+        ),
         dtype=np.float64,
     )
     weights = torch.tensor(weights_numpy, dtype=real_dtype, device=device)
@@ -916,9 +914,7 @@ def prepare_dataset(
                 chunk_cholesky = torch.linalg.cholesky(chunk_metric)
                 teacher_potential_chunks.append(chunk_potential)
                 teacher_metric_chunks.append(chunk_metric)
-                teacher_inverse_cholesky_chunks.append(
-                    torch.linalg.inv(chunk_cholesky)
-                )
+                teacher_inverse_cholesky_chunks.append(torch.linalg.inv(chunk_cholesky))
                 teacher_log_eta_chunks.append(
                     torch.sum(torch.log(chunk_eigenvalues), dim=1)
                     - log_omega[start:stop]
@@ -934,9 +930,7 @@ def prepare_dataset(
                     )
             teacher_potential = torch.cat(teacher_potential_chunks)
             teacher_metric = torch.cat(teacher_metric_chunks)
-            teacher_inverse_cholesky = torch.cat(
-                teacher_inverse_cholesky_chunks
-            )
+            teacher_inverse_cholesky = torch.cat(teacher_inverse_cholesky_chunks)
             teacher_log_eta = torch.cat(teacher_log_eta_chunks)
     try:
         point_storage_payload = adapter.point_storage_payload(points)
@@ -1004,8 +998,10 @@ def distillation_components(
         delta_potential -= torch.sum(weights * delta_potential)
         potential_loss = torch.sum(weights * delta_potential**2)
 
-        relative = teacher_inverse_cholesky @ model_metric @ torch.conj(
-            teacher_inverse_cholesky.transpose(1, 2)
+        relative = (
+            teacher_inverse_cholesky
+            @ model_metric
+            @ torch.conj(teacher_inverse_cholesky.transpose(1, 2))
         )
         relative = 0.5 * (relative + torch.conj(relative.transpose(1, 2)))
         relative_eigenvalues = torch.linalg.eigvalsh(relative)
@@ -1058,9 +1054,7 @@ def evaluate_model(
 
     model_log_eta = []
     model_potential = [] if dataset["teacher_potential"] is not None else None
-    model_metric_loss = (
-        [] if dataset["teacher_inverse_cholesky"] is not None else None
-    )
+    model_metric_loss = [] if dataset["teacher_inverse_cholesky"] is not None else None
     minimum_metric_eigenvalue = float("inf")
     with torch.no_grad():
         for start in range(0, dataset["count"], chunk_size):
@@ -1077,14 +1071,18 @@ def evaluate_model(
             )
             if not bool(torch.all(eigenvalues > 0)):
                 raise FloatingPointError("compressed validation metric is not positive")
-            log_eta = torch.sum(torch.log(eigenvalues), dim=1) - dataset["log_omega"][slc]
+            log_eta = (
+                torch.sum(torch.log(eigenvalues), dim=1) - dataset["log_omega"][slc]
+            )
             if model_metric_loss is not None:
-                relative = dataset["teacher_inverse_cholesky"][slc] @ metric @ torch.conj(
-                    dataset["teacher_inverse_cholesky"][slc].transpose(1, 2)
+                relative = (
+                    dataset["teacher_inverse_cholesky"][slc]
+                    @ metric
+                    @ torch.conj(
+                        dataset["teacher_inverse_cholesky"][slc].transpose(1, 2)
+                    )
                 )
-                relative = 0.5 * (
-                    relative + torch.conj(relative.transpose(1, 2))
-                )
+                relative = 0.5 * (relative + torch.conj(relative.transpose(1, 2)))
                 relative_eigenvalues = torch.linalg.eigvalsh(relative)
                 model_metric_loss.append(
                     torch.mean(torch.log(relative_eigenvalues) ** 2, dim=1)
@@ -1138,9 +1136,7 @@ def evaluate_model(
         "affine_metric_rms_to_teacher": (
             None if metric_squared is None else float(torch.sqrt(metric_squared).cpu())
         ),
-        "fixed_kappa_log_energy_rms": float(
-            torch.sqrt(fixed_kappa_log_energy).cpu()
-        ),
+        "fixed_kappa_log_energy_rms": float(torch.sqrt(fixed_kappa_log_energy).cpu()),
         "fixed_teacher_kappa_sqrt_ma_energy": float(torch.sqrt(fixed_kappa_ma).cpu()),
         "fixed_teacher_kappa_upper_tail_cvar": float(fixed_kappa_tail.cpu()),
         "minimum_metric_eigenvalue": minimum_metric_eigenvalue,
@@ -1237,7 +1233,9 @@ def main() -> None:
     if device.type == "cuda" and not torch.cuda.is_available():
         raise SystemExit("CUDA was requested but is unavailable")
     real_dtype = torch.float32 if args.precision == "complex64" else torch.float64
-    complex_dtype = torch.complex64 if args.precision == "complex64" else torch.complex128
+    complex_dtype = (
+        torch.complex64 if args.precision == "complex64" else torch.complex128
+    )
 
     adapter = get_adapter(args.adapter)
     model_geometry = adapter.make_model(args.model_seed, exact=True)
@@ -1271,7 +1269,9 @@ def main() -> None:
     else:
         inferred_site_count = infer_tensor_site_count(source.degree, teacher.degree)
         if args.site_count is not None and args.site_count != inferred_site_count:
-            raise ValueError("--site-count disagrees with the teacher/source degree ratio")
+            raise ValueError(
+                "--site-count disagrees with the teacher/source degree ratio"
+            )
         site_count = inferred_site_count
         target_normalization = float(teacher.normalization)
         target_degree = tuple(int(value) for value in teacher.degree)
@@ -1325,11 +1325,7 @@ def main() -> None:
     trainable_physical_dictionary = False
     if args.initial_model is not None:
         initial_model_path = args.initial_model.expanduser().resolve()
-        initial_model_payload = torch.load(
-            initial_model_path,
-            map_location="cpu",
-            weights_only=False,
-        )
+        initial_model_payload = safe_torch_load(initial_model_path, map_location="cpu")
         if initial_model_payload.get("schema") != "type11-positive-tensor-network-v1":
             raise ValueError("unrecognized initial tensor-network artifact")
         initial_teacher_transition = validate_initial_model_compatibility(
@@ -1342,9 +1338,7 @@ def main() -> None:
             target_degree=target_degree,
             target_normalization=target_normalization,
         )
-        architecture = initial_model_payload.get(
-            "architecture", "dense_local_cores"
-        )
+        architecture = initial_model_payload.get("architecture", "dense_local_cores")
         if architecture == "shared_local_dictionary":
             dictionary_value = initial_model_payload["state_dict"].get(
                 "physical_dictionary"
@@ -1394,8 +1388,13 @@ def main() -> None:
                     "initial model bond dimension differs; pass "
                     "--allow-bond-expansion to embed a smaller model"
                 )
-            if initial_bond_dimension <= 0 or initial_bond_dimension > model.bond_dimension:
-                raise ValueError("initial model must have a smaller positive bond dimension")
+            if (
+                initial_bond_dimension <= 0
+                or initial_bond_dimension > model.bond_dimension
+            ):
+                raise ValueError(
+                    "initial model must have a smaller positive bond dimension"
+                )
             expanded_state = expand_tensor_network_state_dict(
                 model.state_dict(), initial_model_payload["state_dict"]
             )
@@ -1531,18 +1530,14 @@ def main() -> None:
             )
         training_semantics["implementation"] = {
             "trainer_sha256": sha256_file(Path(__file__).resolve()),
-            "gcicy_metric_python_sha256": sha256_python_tree(
-                ROOT / "gcicy_metric"
-            ),
+            "gcicy_metric_python_sha256": sha256_python_tree(ROOT / "gcicy_metric"),
             "python_version": sys.version,
             "numpy_version": np.__version__,
             "scipy_version": importlib.metadata.version("scipy"),
             "torch_version": str(torch.__version__),
             "torch_cuda_version": torch.version.cuda,
             "cudnn_version": torch.backends.cudnn.version(),
-            "deterministic_algorithms": (
-                torch.are_deterministic_algorithms_enabled()
-            ),
+            "deterministic_algorithms": (torch.are_deterministic_algorithms_enabled()),
             "cudnn_benchmark": torch.backends.cudnn.benchmark,
             "cudnn_deterministic": torch.backends.cudnn.deterministic,
             "float32_matmul_precision": torch.get_float32_matmul_precision(),
@@ -1593,11 +1588,7 @@ def main() -> None:
 
     if resume_checkpoint_path is not None:
         resume_checkpoint_sha256 = sha256_file(resume_checkpoint_path)
-        resume_payload = torch.load(
-            resume_checkpoint_path,
-            map_location="cpu",
-            weights_only=False,
-        )
+        resume_payload = safe_torch_load(resume_checkpoint_path, map_location="cpu")
         validate_training_checkpoint(
             resume_payload,
             training_semantics=training_semantics,
@@ -1701,8 +1692,7 @@ def main() -> None:
                 evaluations_since_material_improvement += 1
         should_stop = (
             args.early_stopping_patience > 0
-            and evaluations_since_material_improvement
-            >= args.early_stopping_patience
+            and evaluations_since_material_improvement >= args.early_stopping_patience
         )
         if should_stop:
             print(
@@ -1849,9 +1839,7 @@ def main() -> None:
             "source_artifact": str(source_path),
             "source_artifact_sha256": source_artifact_sha256,
             "teacher_artifact": None if teacher_path is None else str(teacher_path),
-            "teacher_artifact_sha256": (
-                teacher_artifact_sha256
-            ),
+            "teacher_artifact_sha256": (teacher_artifact_sha256),
             "training_mode": training_mode,
             "source_degree": list(source.degree),
             "target_degree": list(target_degree),
@@ -1891,9 +1879,7 @@ def main() -> None:
         "source_artifact": str(source_path),
         "source_artifact_sha256": source_artifact_sha256,
         "teacher_artifact": None if teacher_path is None else str(teacher_path),
-        "teacher_artifact_sha256": (
-            teacher_artifact_sha256
-        ),
+        "teacher_artifact_sha256": (teacher_artifact_sha256),
         "training_mode": training_mode,
         "model_seed": args.model_seed,
         "torch_seed": args.torch_seed,
@@ -1922,7 +1908,9 @@ def main() -> None:
             "shards": train["shards"],
             "common_pool": train["common_pool"],
             "common_pool_sha256": train["common_pool_sha256"],
-            "importance_effective_sample_size": train["importance_effective_sample_size"],
+            "importance_effective_sample_size": train[
+                "importance_effective_sample_size"
+            ],
         },
         "validation": {
             "points": validation["count"],
@@ -1986,9 +1974,7 @@ def main() -> None:
                 else "fresh_training"
             ),
             "resumed_from": (
-                None
-                if resume_checkpoint_path is None
-                else str(resume_checkpoint_path)
+                None if resume_checkpoint_path is None else str(resume_checkpoint_path)
             ),
             "resumed_from_sha256": resume_checkpoint_sha256,
         }

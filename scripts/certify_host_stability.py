@@ -112,14 +112,22 @@ def fresh_process_results(
 ) -> list[dict[str, object]]:
     code = (
         "import json,sys,numpy,scipy,torch; "
-        "torch.load(sys.argv[1],map_location='cpu',weights_only=False); "
+        "sys.path.insert(0,sys.argv[2]); "
+        "from gcicy_metric.pipeline.safe_torch_load import safe_torch_load; "
+        "safe_torch_load(sys.argv[1],map_location='cpu'); "
         "print(json.dumps({'numpy':numpy.__version__,'scipy':scipy.__version__,"
         "'torch':torch.__version__},sort_keys=True))"
     )
     rows = []
     for attempt in range(1, DEFAULT_FRESH_PROCESS_PROBES + 1):
         completed = subprocess.run(
-            [args.python, "-c", code, str(args.checkpoint.expanduser().resolve())],
+            [
+                args.python,
+                "-c",
+                code,
+                str(args.checkpoint.expanduser().resolve()),
+                str(ROOT),
+            ],
             check=False,
             capture_output=True,
             text=True,

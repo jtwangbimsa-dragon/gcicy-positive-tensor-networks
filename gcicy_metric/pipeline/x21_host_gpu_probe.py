@@ -37,6 +37,7 @@ from .host_stability_gate import (
     HostStabilityError,
     normalize_gpu_probe,
 )
+from .safe_torch_load import safe_torch_load
 from .x21_auto_research import (
     X21AutoResearchError,
     digest_value,
@@ -74,6 +75,7 @@ SOURCE_RELATIVE_PATHS = (
     "gcicy_metric/pipeline/x21_auto_research.py",
     "gcicy_metric/pipeline/experiment_workflow.py",
     "gcicy_metric/pipeline/host_stability_gate.py",
+    "gcicy_metric/pipeline/safe_torch_load.py",
     "gcicy_metric/pipeline/positive_tensor_network.py",
     "gcicy_metric/pipeline/common_point_pool.py",
     "gcicy_metric/pipeline/parallel_sampling.py",
@@ -384,9 +386,7 @@ def _protocol_contract(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
 
 def _load_torch_object(path: Path, *, role: str) -> dict[str, Any]:
     try:
-        import torch
-
-        value = torch.load(path, map_location="cpu", weights_only=False)
+        value = safe_torch_load(path, map_location="cpu")
     except (OSError, RuntimeError, TypeError, ValueError, ModuleNotFoundError) as error:
         raise X21HostGPUProbeError(f"cannot load {role} on CPU") from error
     _require(isinstance(value, dict), f"{role} is not a dictionary")
