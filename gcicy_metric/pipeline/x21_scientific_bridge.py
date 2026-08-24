@@ -26,11 +26,10 @@ import os
 from pathlib import Path
 import platform
 import subprocess
-import sys
 import tempfile
 from typing import Any, Iterator, Mapping, Sequence
 
-from .experiment_workflow import gpu_lock
+from .experiment_workflow import active_python_executable, gpu_lock
 from .host_stability_gate import (
     CERTIFICATE_SCHEMA,
     HostStabilityError,
@@ -106,6 +105,7 @@ SOURCE_DEPENDENCIES = (
     TAIL_RELATIVE,
     BOOTSTRAP_RELATIVE,
     "gcicy_metric/pipeline/positive_tensor_network.py",
+    "gcicy_metric/pipeline/experiment_workflow.py",
     "gcicy_metric/pipeline/common_point_pool.py",
     "gcicy_metric/pipeline/tail.py",
     "gcicy_metric/pipeline/safe_torch_load.py",
@@ -918,7 +918,7 @@ def prepare_optimizer_path_bridge(
             ("bootstrap", BOOTSTRAP_RELATIVE),
         )
     }
-    python_path = str(Path(sys.executable).resolve())
+    python_path = active_python_executable()
     if device == "cuda":
         host_identity_sha256 = _host_identity_sha256()
         requirement_rows = {

@@ -10,6 +10,7 @@ import pytest
 from gcicy_metric.pipeline.experiment_workflow import (
     WorkflowError,
     _retryable,
+    active_python_executable,
     atomic_write_json,
     bootstrap_lock,
     campaign_lock,
@@ -25,6 +26,15 @@ from gcicy_metric.pipeline.experiment_workflow import (
     verify_frozen_inputs,
     verify_cuda_requirements,
 )
+
+
+def test_active_python_executable_preserves_virtualenv_symlink(tmp_path, monkeypatch):
+    target = Path(sys.executable).resolve()
+    link = tmp_path / "venv-python"
+    link.symlink_to(target)
+    monkeypatch.setattr(sys, "executable", str(link))
+    assert active_python_executable() == str(link.absolute())
+    assert active_python_executable() != str(link.resolve())
 
 
 def write_manifest(
@@ -319,7 +329,11 @@ def test_json_paths_support_list_indices_and_keys_containing_dots(tmp_path):
     initialize_run_root(
         plan,
         frozen_inputs=verify_frozen_inputs(plan),
-        source_identity={"commit": "test", "branch": "exp/test", "status_porcelain": ""},
+        source_identity={
+            "commit": "test",
+            "branch": "exp/test",
+            "status_porcelain": "",
+        },
     )
 
     counts = run_workflow(plan, gpu_id="0", lock_root=tmp_path / "locks")

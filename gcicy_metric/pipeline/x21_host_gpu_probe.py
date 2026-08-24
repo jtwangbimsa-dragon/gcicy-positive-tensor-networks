@@ -26,12 +26,11 @@ from pathlib import Path
 import platform
 import re
 import subprocess
-import sys
 from typing import Any, Mapping
 
 import numpy as np
 
-from .experiment_workflow import gpu_lock
+from .experiment_workflow import active_python_executable, gpu_lock
 from .host_stability_gate import (
     GPU_PROBE_SCHEMA,
     HostStabilityError,
@@ -730,7 +729,7 @@ def prepare_probe(
             os.fsync(handle.fileno())
 
     training_root = (output_root / "training").resolve()
-    python_path = str(Path(sys.executable).resolve())
+    python_path = active_python_executable()
     command = _training_command(
         python_path=python_path,
         trainer_path=trainer_path,
@@ -945,7 +944,7 @@ def _verify_plan(root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
         plan["runtime_environment"] == _runtime_environment(),
         "probe runtime environment drifted",
     )
-    python_path = str(Path(sys.executable).resolve())
+    python_path = active_python_executable()
     _require(
         plan["python"] == {"path": python_path, "version": platform.python_version()},
         "probe Python runtime drifted",

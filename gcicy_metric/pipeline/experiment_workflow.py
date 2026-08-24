@@ -59,6 +59,15 @@ def utc_now() -> str:
     )
 
 
+def active_python_executable() -> str:
+    """Return the active interpreter path without dereferencing a venv symlink."""
+
+    path = Path(sys.executable).expanduser()
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    return os.path.abspath(path)
+
+
 def canonical_json_bytes(value: Any) -> bytes:
     return json.dumps(
         value,

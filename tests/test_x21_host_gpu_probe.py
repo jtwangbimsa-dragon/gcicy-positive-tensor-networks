@@ -395,7 +395,7 @@ def test_prepare_binds_protocol_parent_full_epoch_and_nonheldout_pools(
     assert plan["fixed_workload"]["parameter_scope"] == "cores-only"
     assert plan["data_access_policy"]["allowed_splits"] == ["train", "selection"]
     command = plan["training_command"]
-    assert command[0] == str(Path(sys.executable).resolve())
+    assert command[0] == probe.active_python_executable()
     assert command[1].endswith("scripts/train_type11_positive_tensor_network.py")
     assert command[command.index("--epochs") + 1] == "1"
     assert command[command.index("--batch-size") + 1] == "1024"
