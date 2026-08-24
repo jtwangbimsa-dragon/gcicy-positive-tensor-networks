@@ -254,3 +254,18 @@ checkpoint. They are independent channel-activation/optimization replicas with
 separate optimizer seeds and matched batch plans, not three independently
 trained upstream parent models. Any paper-level claim must preserve that
 distinction and use a separately frozen final evaluation workflow.
+
+## Multi-round manager v2
+
+The executable bridge above remains intentionally frozen at Round 1. The
+checked-in v2 manager audits its completed controller and bridge artifacts,
+separates a scientific rejection from a technical worker failure, and resolves
+the correct next branch from a closed four-round catalog. See
+`QUINTIC_ARCHITECTURE_MULTI_ROUND_V2.md` and
+`protocols/generic_quintic_architecture_multi_round_v2.json`.
+
+The v2 catalog preregisters progressive rank growth, all-parameter joint
+training, and an optimizer-path comparison. Those post-Round-1 recipes are
+currently `blocked-by-adapter`; the manager refuses to execute them until a
+reviewed adapter is actually present. This preserves an auditable research
+queue without representing planned experiments as completed or executable.

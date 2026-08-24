@@ -1,0 +1,243 @@
+{
+  "schema": "gcicy-quintic-architecture-multi-round-catalog-v2",
+  "catalog_id": "generic-quintic-architecture-auto-research-v2",
+  "maximum_rounds": 4,
+  "promotion_seeds": [202608231, 202608232, 202608233],
+  "data_contract": {
+    "precision": "complex64",
+    "fit_examples": 30000,
+    "selection_examples": 5000,
+    "development_evaluation_examples": 5000,
+    "protocol_sha256": "14bf129182a6797bbcb01a63c096da17b747cb281110c196f1a2988501680ca9",
+    "search_indices_sha256": "e7e9f0fdeeb368ca2955586ee69070d073aaa4a4a41aa2844189e42898bfbc74",
+    "input_sha256": {
+      "search-native-points": "3ce7ca795fb0ec5ce4dc6e86d4e6ca3fe83eb2270a9929ce3f5986904fc75e7a",
+      "search-native-pullbacks": "242dccf4e9e9907e26a28924a698f72e6a3e0abeb544547c4ed899d8bca36a83",
+      "development-evaluation-points": "5e90b7efe7e5451925da211c27c354d5aed4bf14ac20c6cf86bc11f4a5bceccf",
+      "development-evaluation-pullbacks": "6601c5d4e138c6e5d2bf17ee9258dff39a4c62147b20a8ab0387b3a27ddf34d0"
+    },
+    "matched_batch_plans": [
+      {
+        "seed": 202608231,
+        "plan_seed": 13627476375321623966,
+        "file_sha256": "582ee5b208617c2fcbf05b47e3de8e6c5040109f57ed2f89d4508d9ae9c9072e",
+        "value_set_sha256": "050ae8e1f2f4de4032f4a8d3a91fdab658a4ab36f29a37977a8507ef43193c1f"
+      },
+      {
+        "seed": 202608232,
+        "plan_seed": 2579936656769250165,
+        "file_sha256": "7ee3f3cb5538ac4fa9717278fff8217131bc7c82a09308202cc6ce354d7cb647",
+        "value_set_sha256": "9275fe66352d27b7f549078b5866a69a555c455934ad41a2d414d054e66065fb"
+      },
+      {
+        "seed": 202608233,
+        "plan_seed": 11950615075893195275,
+        "file_sha256": "76df3c541391eb8c3b030ffbd90b22cab758faee847179c7f25bb10ff926d7e3",
+        "value_set_sha256": "04166e251adc8bbe9b899411dc28d47d207e3a84d1aad3eb418105712072949f"
+      }
+    ],
+    "historical_confirmation": "absent",
+    "final_blind": "absent"
+  },
+  "round1_contract": {
+    "campaign_id": "generic-quintic-edge6-capacity-round1-20260823",
+    "candidate_id": "edge6-rank39",
+    "baseline_checkpoint_sha256": "1836b868f9b852f0ab29172a83c07caf4c47d2e75f71b9ff588add2d4f96359b",
+    "mutation": {
+      "kind": "rank",
+      "target": "internal-edge",
+      "edge": 6,
+      "source_dimension": 25,
+      "target_dimension": 39,
+      "structural_maximum": 100,
+      "new_output_real_parameters": 9800
+    },
+    "pipeline": [
+      {"kind": "local-activate"},
+      {"kind": "matched-relax"}
+    ],
+    "adapter": "existing-round1-bridge-v1"
+  },
+  "branches": {
+    "r1_promoted": [
+      "r2-edge6-rank53-progressive",
+      "r3-all-parameter-joint",
+      "r4-constant-optimizer-path"
+    ],
+    "r1_scientific_rejected": [
+      "r2-edge6-rank39-scale025",
+      "r3-all-parameter-joint",
+      "r4-constant-optimizer-path"
+    ]
+  },
+  "recipes": [
+    {
+      "recipe_id": "r2-edge6-rank53-progressive",
+      "round": 2,
+      "category": "progressive-initialization",
+      "hypothesis": "A second exact nested expansion from the promoted rank-39 family to rank 53 improves the development metrics over no growth.",
+      "precondition": {"r1_outcome": "promoted"},
+      "intervention": {
+        "kind": "rank-growth",
+        "edge": 6,
+        "source_dimension": 39,
+        "target_dimension": 53,
+        "structural_maximum": 100,
+        "new_total_real_parameters": 9800,
+        "activation_scale": 1.0,
+        "orthogonalize_new_outputs": true
+      },
+      "budget": {
+        "local_activate_optimizer_updates": 1200,
+        "matched_relax_optimizer_updates_per_arm": 600,
+        "batch_size": 1024,
+        "learning_rate": 0.000003,
+        "gradient_clip_norm": 1.0,
+        "fit_examples": 30000,
+        "selection_examples": 5000,
+        "development_evaluation_examples": 5000
+      },
+      "promotion_gate": {
+        "minimum_median_relative_sigma_gain": 0.002,
+        "minimum_median_relative_chi_gain": 0.002,
+        "minimum_improved_seeds": 2,
+        "minimum_paired_ci_positive_seeds": 3,
+        "maximum_seed_relative_regression": 0.0,
+        "maximum_tail_relative_degradation": 0.005,
+        "require_positive_metric": true
+      },
+      "adapter": {
+        "status": "blocked-by-adapter",
+        "required_adapter": "quintic-progressive-rank-growth-v2"
+      }
+    },
+    {
+      "recipe_id": "r2-edge6-rank39-scale025",
+      "round": 2,
+      "category": "progressive-initialization",
+      "hypothesis": "After a scientific rejection of the scale-1 rank-39 proposal, a conservative scale-0.25 exact activation improves the same endpoint without changing any other registered setting.",
+      "precondition": {"r1_outcome": "scientific-rejected"},
+      "intervention": {
+        "kind": "rank-growth",
+        "edge": 6,
+        "source_dimension": 25,
+        "target_dimension": 39,
+        "structural_maximum": 100,
+        "new_total_real_parameters": 9800,
+        "activation_scale": 0.25,
+        "orthogonalize_new_outputs": true
+      },
+      "budget": {
+        "local_activate_optimizer_updates": 1200,
+        "matched_relax_optimizer_updates_per_arm": 600,
+        "batch_size": 1024,
+        "learning_rate": 0.000003,
+        "gradient_clip_norm": 1.0,
+        "fit_examples": 30000,
+        "selection_examples": 5000,
+        "development_evaluation_examples": 5000
+      },
+      "promotion_gate": {
+        "minimum_median_relative_sigma_gain": 0.002,
+        "minimum_median_relative_chi_gain": 0.002,
+        "minimum_improved_seeds": 2,
+        "minimum_paired_ci_positive_seeds": 3,
+        "maximum_seed_relative_regression": 0.0,
+        "maximum_tail_relative_degradation": 0.005,
+        "require_positive_metric": true
+      },
+      "adapter": {
+        "status": "blocked-by-adapter",
+        "required_adapter": "quintic-conservative-rank-activation-v2"
+      }
+    },
+    {
+      "recipe_id": "r3-all-parameter-joint",
+      "round": 3,
+      "category": "parameter-scope",
+      "hypothesis": "Jointly training the shared leaf dictionary and all internal tensors improves over internal-tensor-only training from the same champion checkpoint.",
+      "precondition": {"previous_round": 2},
+      "intervention": {
+        "kind": "parameter-scope",
+        "control": {
+          "trainable_scope": "internal",
+          "scheduler": "cosine",
+          "learning_rate": 0.000003
+        },
+        "candidate": {
+          "trainable_scope": "all",
+          "scheduler": "cosine",
+          "learning_rate": 0.000003
+        },
+        "new_total_real_parameters": 0
+      },
+      "budget": {
+        "local_activate_optimizer_updates": 0,
+        "matched_relax_optimizer_updates_per_arm": 600,
+        "batch_size": 1024,
+        "learning_rate": 0.000003,
+        "gradient_clip_norm": 1.0,
+        "fit_examples": 30000,
+        "selection_examples": 5000,
+        "development_evaluation_examples": 5000
+      },
+      "promotion_gate": {
+        "minimum_median_relative_sigma_gain": 0.002,
+        "minimum_median_relative_chi_gain": 0.002,
+        "minimum_improved_seeds": 2,
+        "minimum_paired_ci_positive_seeds": 3,
+        "maximum_seed_relative_regression": 0.0,
+        "maximum_tail_relative_degradation": 0.005,
+        "require_positive_metric": true
+      },
+      "adapter": {
+        "status": "available",
+        "required_adapter": "quintic-paired-parameter-scope-v2"
+      }
+    },
+    {
+      "recipe_id": "r4-constant-optimizer-path",
+      "round": 4,
+      "category": "optimizer-path",
+      "hypothesis": "A constant learning-rate path improves over the registered cosine path when both arms train all parameters from the same champion checkpoint.",
+      "precondition": {"previous_round": 3},
+      "intervention": {
+        "kind": "optimizer-path",
+        "control": {
+          "trainable_scope": "all",
+          "scheduler": "cosine",
+          "learning_rate": 0.000003
+        },
+        "candidate": {
+          "trainable_scope": "all",
+          "scheduler": "constant",
+          "learning_rate": 0.000003
+        },
+        "new_total_real_parameters": 0
+      },
+      "budget": {
+        "local_activate_optimizer_updates": 0,
+        "matched_relax_optimizer_updates_per_arm": 600,
+        "batch_size": 1024,
+        "learning_rate": 0.000003,
+        "gradient_clip_norm": 1.0,
+        "fit_examples": 30000,
+        "selection_examples": 5000,
+        "development_evaluation_examples": 5000
+      },
+      "promotion_gate": {
+        "minimum_median_relative_sigma_gain": 0.002,
+        "minimum_median_relative_chi_gain": 0.002,
+        "minimum_improved_seeds": 2,
+        "minimum_paired_ci_positive_seeds": 3,
+        "maximum_seed_relative_regression": 0.0,
+        "maximum_tail_relative_degradation": 0.005,
+        "require_positive_metric": true
+      },
+      "adapter": {
+        "status": "available",
+        "required_adapter": "quintic-paired-optimizer-path-v2"
+      }
+    }
+  ]
+}

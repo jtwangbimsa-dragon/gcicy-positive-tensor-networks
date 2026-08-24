@@ -24,6 +24,25 @@ for every endpoint.  Its 109-job DAG has exactly twelve metric result rows plus
 one create-only deterministic D16 adjudication artifact.  It is independent of
 the broader 279-job X21 campaign.
 
+The evaluator-driven successor is documented in
+[X21_AUTO_RESEARCH_V1.md](X21_AUTO_RESEARCH_V1.md), with its locked path-free
+protocol in [x21_auto_research_v1.json](protocols/x21_auto_research_v1.json).
+It keeps exact checkpoint recovery in a separate non-scientific ledger and
+normalizes the three baseline endpoints. Because its historical development
+hash is no longer eligible for evidence, scientific rounds first use the
+[fresh X21 development-pool v2 workflow](X21_FRESH_DEVELOPMENT_POOL_V2.md),
+then evaluate optimizer, dictionary-scope, D16, and k24 actions under paired
+three-seed fixed budgets. The executable optimizer-path bridge uses the
+X21-specific create-only GPU probes to obtain short-lived host certificates;
+later catalog rounds remain fail-closed until their numerical adapters are
+separately reviewed.
+
+The generic-quintic continuation is documented in
+[QUINTIC_ARCHITECTURE_MULTI_ROUND_V2.md](QUINTIC_ARCHITECTURE_MULTI_ROUND_V2.md).
+Its R3/R4 paired bridge executes parameter-scope and optimizer-path comparisons
+with the original R1 indices and batch plans, a shared GPU lock, short-lived
+host certificates, and no historical confirmation or blind input.
+
 ## Focused X21 architecture-capacity quick start
 
 Use a fresh run root.  The preflight selector includes only the preparation,

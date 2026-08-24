@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Compare matched full-model relaxation before and after tree-rank growth."""
+"""Compare matched compiled-tree relaxation under audited per-arm policies."""
 
 from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -74,6 +75,41 @@ def parse_args() -> argparse.Namespace:
         "--scheduler",
         choices=("constant", "cosine"),
         default="cosine",
+        help=(
+            "Common scheduler used by both arms unless a role-specific "
+            "scheduler override is supplied."
+        ),
+    )
+    parser.add_argument(
+        "--control-scheduler",
+        choices=("constant", "cosine"),
+        default=None,
+        help="Optional control-arm override for --scheduler.",
+    )
+    parser.add_argument(
+        "--candidate-scheduler",
+        choices=("constant", "cosine"),
+        default=None,
+        help="Optional candidate-arm override for --scheduler.",
+    )
+    parser.add_argument(
+        "--control-trainable-scope",
+        choices=("internal", "all"),
+        default="all",
+    )
+    parser.add_argument(
+        "--candidate-trainable-scope",
+        choices=("internal", "all"),
+        default="all",
+    )
+    parser.add_argument(
+        "--require-equal-total-parameters",
+        action="store_true",
+        help=(
+            "Reject checkpoints with unequal total parameter counts. This is "
+            "automatically required when the two role-specific training "
+            "policies differ."
+        ),
     )
     parser.add_argument("--eval-every", type=int, default=25)
     parser.add_argument("--train-size", type=int, default=30_000)
@@ -156,9 +192,104 @@ def real_parameter_count(model: torch.nn.Module) -> int:
     )
 
 
+def role_training_policies(args: argparse.Namespace) -> dict[str, dict[str, str]]:
+    """Resolve backward-compatible common settings into per-arm policies."""
+
+    return {
+        "control": {
+            "trainable_scope": str(args.control_trainable_scope),
+            "scheduler": str(args.control_scheduler or args.scheduler),
+        },
+        "candidate": {
+            "trainable_scope": str(args.candidate_trainable_scope),
+            "scheduler": str(args.candidate_scheduler or args.scheduler),
+        },
+    }
+
+
+def configure_trainable_scope(
+    model: torch.nn.Module,
+    scope: str,
+) -> list[str]:
+    """Apply the registered parameter scope and return its exact tensor names."""
+
+    if scope not in {"internal", "all"}:
+        raise ValueError("trainable scope must be internal or all")
+    trainable_names = []
+    for name, parameter in model.named_parameters():
+        trainable = scope == "all" or name.startswith("internal_tensors.")
+        parameter.requires_grad_(trainable)
+        if trainable:
+            trainable_names.append(name)
+    if not trainable_names:
+        raise ValueError(f"trainable scope {scope} selected no parameters")
+    return trainable_names
+
+
+def named_real_parameter_count(
+    model: torch.nn.Module,
+    names: set[str],
+) -> int:
+    return sum(
+        parameter.numel() * (2 if parameter.is_complex() else 1)
+        for name, parameter in model.named_parameters()
+        if name in names
+    )
+
+
+def batch_plan_digest(batch_plan: np.ndarray) -> str:
+    """Hash an array including its dtype and shape, independent of its path."""
+
+    contiguous = np.ascontiguousarray(batch_plan)
+    digest = hashlib.sha256()
+    digest.update(contiguous.dtype.str.encode("ascii"))
+    digest.update(np.asarray(contiguous.shape, dtype=np.int64).tobytes())
+    digest.update(contiguous.tobytes())
+    return digest.hexdigest()
+
+
+def assert_batch_plan_unchanged(
+    batch_plan: np.ndarray,
+    reference: np.ndarray,
+    reference_sha256: str,
+) -> None:
+    """Fail closed if an arm receives or mutates a different minibatch plan."""
+
+    if (
+        batch_plan.dtype != reference.dtype
+        or batch_plan.shape != reference.shape
+        or not np.array_equal(batch_plan, reference)
+        or batch_plan_digest(batch_plan) != reference_sha256
+    ):
+        raise RuntimeError("paired arms did not use the same fixed batch plan")
+
+
+def total_parameter_parity_audit(
+    *,
+    control: int,
+    candidate: int,
+    required: bool,
+) -> dict[str, Any]:
+    equal = control == candidate
+    audit = {
+        "required": bool(required),
+        "equal": equal,
+        "control_total_real_parameters": int(control),
+        "candidate_total_real_parameters": int(candidate),
+        "candidate_minus_control": int(candidate - control),
+    }
+    if required and not equal:
+        raise ValueError(
+            "paired scope/scheduler comparison requires equal total parameters"
+        )
+    return audit
+
+
 def parameter_audit(
     model: torch.nn.Module,
     initial: dict[str, torch.Tensor],
+    *,
+    trainable_names: set[str] | None = None,
 ) -> dict[str, Any]:
     rows = []
     total_changed_real = 0
@@ -173,6 +304,8 @@ def parameter_audit(
         threshold = 32.0 * torch.finfo(parameter.real.dtype).eps
         changed_scalars = int(torch.count_nonzero(absolute > threshold))
         changed_real = changed_scalars * (2 if parameter.is_complex() else 1)
+        trainable = trainable_names is None or name in trainable_names
+        exactly_unchanged = bool(torch.equal(parameter.detach(), before))
         total_changed_real += changed_real
         maximum_absolute = max(maximum_absolute, max_absolute)
         rows.append(
@@ -182,17 +315,36 @@ def parameter_audit(
                 "real_parameters": (
                     parameter.numel() * (2 if parameter.is_complex() else 1)
                 ),
+                "trainable": trainable,
+                "exactly_unchanged": exactly_unchanged,
                 "changed_real_parameters": changed_real,
                 "max_absolute_change": max_absolute,
                 "l2_change": delta_norm,
                 "relative_l2_change": delta_norm / max(before_norm, 1.0e-30),
             }
         )
-    return {
+    audit = {
         "total_changed_real_parameters": total_changed_real,
         "maximum_absolute_change": maximum_absolute,
         "tensors": rows,
     }
+    frozen = [row for row in rows if not row["trainable"]]
+    audit["frozen_tensor_count"] = len(frozen)
+    audit["frozen_real_parameters"] = sum(row["real_parameters"] for row in frozen)
+    audit["all_frozen_parameters_exactly_unchanged"] = all(
+        row["exactly_unchanged"] for row in frozen
+    )
+    return audit
+
+
+def assert_frozen_parameters_unchanged(audit: dict[str, Any]) -> None:
+    if not audit["all_frozen_parameters_exactly_unchanged"]:
+        changed = [
+            row["name"]
+            for row in audit["tensors"]
+            if not row["trainable"] and not row["exactly_unchanged"]
+        ]
+        raise RuntimeError(f"frozen parameters changed: {changed}")
 
 
 def relative_gain(start: float, final: float) -> float:
@@ -281,6 +433,12 @@ def main() -> None:
         raise ValueError("confirmation paths are required outside development-only")
     if args.device == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA was requested but is unavailable")
+
+    training_policies = role_training_policies(args)
+    require_equal_total_parameters = bool(
+        args.require_equal_total_parameters
+        or training_policies["control"] != training_policies["candidate"]
+    )
 
     torch.set_num_threads(args.threads)
     torch.manual_seed(args.seed)
@@ -410,6 +568,9 @@ def main() -> None:
                 raise ValueError("fixed batch plan repeats a row within a step")
         batch_plan_path = output_dir / "batch_plan.npy"
         np.save(batch_plan_path, batch_plan, allow_pickle=False)
+        batch_plan_reference = np.array(batch_plan, copy=True)
+        batch_plan_reference.setflags(write=False)
+        fixed_batch_plan_sha256 = batch_plan_digest(batch_plan_reference)
 
         results: dict[str, Any] = {}
         payloads = {
@@ -417,20 +578,34 @@ def main() -> None:
             "candidate": (candidate_payload, candidate_path),
         }
         for role, (payload, source_path) in payloads.items():
+            policy = training_policies[role]
             write_json(
                 status_path,
                 {"state": "running", "phase": "training", "role": role},
             )
             model = build_checkpoint_model(payload, device=device)
-            for parameter in model.parameters():
-                parameter.requires_grad_(True)
+            trainable_names = configure_trainable_scope(
+                model,
+                policy["trainable_scope"],
+            )
+            trainable_name_set = set(trainable_names)
             initial_state = state_to_cpu(model)
             count = real_parameter_count(model)
-            trainable_names = [
-                name
-                for name, parameter in model.named_parameters()
-                if parameter.requires_grad
-            ]
+            trainable_count = named_real_parameter_count(
+                model,
+                trainable_name_set,
+            )
+            if role == "candidate":
+                total_parameter_parity_audit(
+                    control=results["control"]["total_real_parameters"],
+                    candidate=count,
+                    required=require_equal_total_parameters,
+                )
+            assert_batch_plan_unchanged(
+                batch_plan,
+                batch_plan_reference,
+                fixed_batch_plan_sha256,
+            )
             result = train_arm(
                 model,
                 training=datasets["fit"],
@@ -444,9 +619,19 @@ def main() -> None:
                 maximum_tail_degradation=(
                     args.maximum_selection_tail_relative_degradation
                 ),
-                scheduler=args.scheduler,
+                scheduler=policy["scheduler"],
             )
-            audit = parameter_audit(result["model"], initial_state)
+            assert_batch_plan_unchanged(
+                batch_plan,
+                batch_plan_reference,
+                fixed_batch_plan_sha256,
+            )
+            audit = parameter_audit(
+                result["model"],
+                initial_state,
+                trainable_names=trainable_name_set,
+            )
+            assert_frozen_parameters_unchanged(audit)
             polished = model_payload(
                 payload,
                 result["best_state"],
@@ -462,9 +647,11 @@ def main() -> None:
                 "checkpoint": checkpoint,
                 "checkpoint_sha256": sha256_file(checkpoint),
                 "total_real_parameters": count,
-                "trainable_real_parameters": count,
+                "trainable_real_parameters": trainable_count,
                 "new_real_parameters_vs_control": 0,
+                "training_policy": policy,
                 "trainable_tensor_names": trainable_names,
+                "fixed_batch_plan_sha256": fixed_batch_plan_sha256,
                 "initial_statistics": result["initial_statistics"],
                 "initial_tail": result["initial_tail"],
                 "best_statistics": result["best_statistics"],
@@ -475,6 +662,11 @@ def main() -> None:
         results["candidate"]["new_real_parameters_vs_control"] = (
             results["candidate"]["total_real_parameters"]
             - results["control"]["total_real_parameters"]
+        )
+        parameter_parity = total_parameter_parity_audit(
+            control=results["control"]["total_real_parameters"],
+            candidate=results["candidate"]["total_real_parameters"],
+            required=require_equal_total_parameters,
         )
 
         control_selection = results["control"]["best_statistics"]
@@ -588,6 +780,8 @@ def main() -> None:
                 "candidate_checkpoint": str(candidate_path),
                 "output_dir": str(output_dir),
             },
+            "training_policies": training_policies,
+            "total_parameter_parity": parameter_parity,
             "source_checkpoint_sha256": {
                 "control": sha256_file(control_path),
                 "candidate": sha256_file(candidate_path),
@@ -653,6 +847,11 @@ def main() -> None:
             "batch_plan": {
                 "path": str(batch_plan_path),
                 "sha256": sha256_file(batch_plan_path),
+                "array_sha256": fixed_batch_plan_sha256,
+                "same_for_both_arms": all(
+                    row["fixed_batch_plan_sha256"] == fixed_batch_plan_sha256
+                    for row in results.values()
+                ),
                 "fixed_source_sha256": (
                     None
                     if args.fixed_batch_plan_file is None

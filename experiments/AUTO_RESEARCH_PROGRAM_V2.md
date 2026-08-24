@@ -79,7 +79,9 @@ post-freeze manifest and explicit authorization.
 
 The failed 2026-08-23 capacity run remains an immutable operational record.  An
 exact epoch-36 replay belongs only to the recovery lane.  Once a valid
-three-seed parent family exists, the scientific catalogue is:
+three-seed parent family exists, scientific evidence requires a newly generated
+selection-labelled 49,152-point pool; the historical development hash is an
+old confirmation artifact and is rejected. The scientific catalogue is:
 
 1. fixed-update gentle learning-rate path versus the registered standard path;
 2. cores-only versus joint dictionary-and-core training;
@@ -90,6 +92,10 @@ three-seed parent family exists, the scientific catalogue is:
 Each scientific comparison uses the same 12 epochs (2,304 optimizer updates at
 batch size 1,024), the same point order, and the same development evaluator.
 Resource-preflight results determine feasibility only and never rank models.
+The current executable bridge covers the first optimizer-path comparison. The
+remaining X21 actions stay preregistered controller states until narrow
+numerical adapters with the same source, data, host and resume guarantees are
+implemented and reviewed.
 
 ## Generic-quintic catalogue
 
@@ -118,12 +124,15 @@ scientific-rejection fallback is exactly 0.25.
 
 Because process-level crashes can otherwise be mistaken for model failures, a
 scientific service must consume a recent, content-addressed host-health
-certificate.  The strict certificate requires a quiet kernel-log window, no
-OOM/MCE/EDAC/NVRM-Xid event, repeated fresh-process imports and checkpoint
-loads, independent short GPU update probes, finite outputs, a positive metric,
-and a bounded memory peak.  A failed or stale certificate permits diagnostic
-work only.  Diagnostic artifacts are labelled and cannot satisfy a promotion
-gate.
+certificate. The strict certificate fixes a six-hour quiet kernel-log window,
+exactly twenty fresh-process imports/checkpoint loads, and three independent
+GPU receipts with at least ten optimizer steps each. Every receipt is bound to
+the current checkpoint SHA, host identity, clean source commit, timestamp and
+raw report SHA; validation rehashes the checkpoint and raw reports at use time.
+The probes must be finite, positive and remain below 18 GiB allocated memory.
+The certificate expires after thirty minutes. A failed, drifted or stale
+certificate permits diagnostic work only. Diagnostic artifacts are labelled
+and cannot satisfy a promotion gate.
 
 ## Termination and claims
 

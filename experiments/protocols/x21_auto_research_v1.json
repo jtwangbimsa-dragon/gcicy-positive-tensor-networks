@@ -1,0 +1,108 @@
+{
+  "schema": "gcicy-x21-auto-research-protocol-v1",
+  "campaign_id": "x21-auto-research-v1",
+  "promotion_seeds": [8660001, 8660002, 8660003],
+  "recovery_seed": 8660002,
+  "baseline_provenance_contracts": [
+    {
+      "seed": 8660001,
+      "kind": "existing-complete",
+      "certificate_schema": "gcicy-x21-baseline-completion-certificate-v1",
+      "source_campaign_id": "x21-architecture-capacity-v1",
+      "source_plan_sha256": "5daa640bc21641d2c2aedc0738000e392408280ff998f37a3f1a3df6cbbe70e8",
+      "source_job_id": "capacity-precision-k20-d14-r1",
+      "source_job_digest": "c5b8d0db022ace12f9c54bd5fafa0ef7167ed422e4ba424ccb75b4f77e506a42"
+    },
+    {
+      "seed": 8660002,
+      "kind": "exact-recovery",
+      "certificate_schema": "gcicy-x21-exact-recovery-evidence-v1",
+      "recovery_campaign_id": "x21-k20d14-r2-exact-recovery-20260824",
+      "source_campaign_id": "x21-architecture-capacity-v1",
+      "source_plan_sha256": "5daa640bc21641d2c2aedc0738000e392408280ff998f37a3f1a3df6cbbe70e8",
+      "source_job_id": "capacity-precision-k20-d14-r2",
+      "source_job_digest": "9c8227f384a513374cd0d1ad8b9a6ad5c428dd84f40cf607cd71ad0bd35b215e",
+      "source_model_sha256": "f0823a4184a8154a53d4e29a5cef76ac2f25482dbf18df7b8837099d6b77dd42",
+      "source_checkpoint_sha256": "1c4262b7aded03e02432842aa5ed1cb7038a8bab090538609f3966cf6630d4e5",
+      "source_epoch": 36,
+      "training_semantics_sha256": "9c8227f384a513374cd0d1ad8b9a6ad5c428dd84f40cf607cd71ad0bd35b215e",
+      "frozen_inputs_sha256": "5daa640bc21641d2c2aedc0738000e392408280ff998f37a3f1a3df6cbbe70e8"
+    },
+    {
+      "seed": 8660003,
+      "kind": "fresh-completion",
+      "certificate_schema": "gcicy-x21-baseline-completion-certificate-v1",
+      "source_campaign_id": "x21-architecture-capacity-v1",
+      "source_plan_sha256": "3f2eb524250e6a9a84ced567335cab97dac8bc5c3f3dea4a841ebed42bd06b14",
+      "source_job_id": "capacity-precision-k20-d14-r3",
+      "source_job_digest": "47ab422774e813c8cff44c84343088be4c71be218a1b606613a6005b9ece66cd"
+    }
+  ],
+  "expected_baseline_metadata": {
+    "k": 20,
+    "bond_dimension": 14,
+    "train_physical_dictionary": false,
+    "trainable_real_parameter_count": 860552,
+    "precision": "complex64"
+  },
+  "data_contract": {
+    "source_artifact_sha256": "a3ec6af6ba33d9500c9c2a930da4565afa6c07cb081e0656aea88aa8dce2f529",
+    "train_pool_sha256": "050092ddc3f0847cde4b730ddd33c4e7faa6cbaffbfdafd147b171a5f191cf94",
+    "selection_pool_sha256": "d39779ad4bc0dc7bd4381486b198124a563d9a798bfe425a60775e87a1ef7ee9",
+    "development_pool_sha256": "4c4ec82e315351c9a5bebf0b3ba48b611bb8cb4ae433ce8a646e5c00426167cc",
+    "train_points": 196608,
+    "selection_points": 24576,
+    "development_points": 49152,
+    "sampling_cluster_size": 6
+  },
+  "budget": {
+    "optimizer_updates": 2304,
+    "batch_size": 1024,
+    "gradient_clip_norm": 2.0,
+    "evaluation_examples": 49152,
+    "bootstrap_replicates": 2000,
+    "scheduler": "constant"
+  },
+  "allowed_memory_batch_sizes": [1024, 768, 640, 512],
+  "thresholds": {
+    "minimum_median_relative_sigma_gain": 0.002,
+    "minimum_median_relative_chi_gain": 0.002,
+    "minimum_improved_seeds": 2,
+    "minimum_paired_positive_seeds": 3,
+    "maximum_seed_relative_regression": 0.0,
+    "maximum_tail_relative_degradation": 0.005,
+    "equivalence_potential_absolute_tolerance": 0.00001,
+    "equivalence_metric_relative_tolerance": 0.0001
+  },
+  "action_sequence": [
+    {
+      "round": 1,
+      "kind": "optimizer_path",
+      "field": "learning_rate",
+      "control_value": 0.00003,
+      "candidate_value": 0.000015
+    },
+    {
+      "round": 2,
+      "kind": "dictionary_unfreeze",
+      "field": "train_physical_dictionary",
+      "control_value": false,
+      "candidate_value": true
+    },
+    {
+      "round": 3,
+      "kind": "bond_growth_d16",
+      "field": "bond_dimension",
+      "control_value": 14,
+      "candidate_value": 16
+    },
+    {
+      "round": 4,
+      "kind": "site_growth_k24",
+      "field": "k",
+      "control_value": 20,
+      "candidate_value": 24
+    }
+  ],
+  "maximum_rounds": 4
+}

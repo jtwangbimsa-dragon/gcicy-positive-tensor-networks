@@ -23,6 +23,17 @@ TESTS = (
     "tests/test_x21_architecture_capacity_decision.py",
     "tests/test_x21_d16_resource_preflight_manifest.py",
     "tests/test_architecture_auto_research.py",
+    "tests/test_quintic_architecture_round1_bridge.py",
+    "tests/test_compare_generic_quintic_tree_joint_relaxation.py",
+    "tests/test_host_stability_gate.py",
+    "tests/test_quintic_architecture_multi_round.py",
+    "tests/test_quintic_host_gpu_probe.py",
+    "tests/test_quintic_paired_auto_research_bridge.py",
+    "tests/test_x21_auto_research.py",
+    "tests/test_x21_baseline_provenance.py",
+    "tests/test_x21_fresh_development_pool.py",
+    "tests/test_x21_host_gpu_probe.py",
+    "tests/test_x21_scientific_bridge.py",
 )
 
 
